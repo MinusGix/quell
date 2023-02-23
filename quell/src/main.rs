@@ -42,15 +42,15 @@ fn setup(
     // ambient_light.brightness = 0.05;
 
     // light
-    // commands.spawn(PointLightBundle {
-    //     point_light: PointLight {
-    //         intensity: 1500.0,
-    //         shadows_enabled: true,
-    //         ..default()
-    //     },
-    //     transform: Transform::from_xyz(4.0, 8.0, 4.0),
-    //     ..default()
-    // });
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 1500.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        transform: Transform::from_xyz(4.0, 200.0, 4.0),
+        ..default()
+    });
     // camera
     // commands.spawn(Camera3dBundle {
     //     transform: Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -199,9 +199,10 @@ fn create_basic_map_mesh<'a>(
         } else {
             AlphaMode::Opaque
         },
-        unlit: true,
-        metallic: 0.0,
-        reflectance: 0.0,
+        // unlit: true,
+        // metallic: 0.0,
+        emissive: color,
+        // reflectance: 0.0,
         ..Default::default()
     };
 
