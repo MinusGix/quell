@@ -1,0 +1,13 @@
+[package]
+name = "quell"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bevy = "0.9.1"
+# bevy_fly_camera = "0.8.0"
+smooth-bevy-cameras = "0.7.0"
+
+vbsp = { git = "https://github.com/icewind1991/vbsp" }
