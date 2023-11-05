@@ -254,6 +254,18 @@ impl<'a> VMT<'a> {
                 return Err(VMTError::Expected('}'));
             }
 
+            if b.starts_with(b"//") {
+                // comment
+                let end = b
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .unwrap_or_else(|| b.len());
+                let b = &b[end..];
+                let b = take_whitespace(b)?;
+                b_out = b;
+                continue;
+            }
+
             let (b, key_name) = take_text(b)?;
 
             let b = take_whitespace(b)?;
