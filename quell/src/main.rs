@@ -68,6 +68,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     // mut ambient_light: ResMut<AmbientLight>,
+    mut asset_server: ResMut<AssetServer>,
     mut vpk: ResMut<VpkState>,
     mut loaded_textures: ResMut<LoadedTextures>,
     // mut map: Option<ResMut<GameMap>>,
@@ -98,6 +99,28 @@ fn setup(
             Vec3::new(0., 0., 0.),
             Vec3::Y,
         ));
+
+    // let texture_handle = asset_server.load("out.png");
+
+    // let quad_width = 8.0;
+    // let quad_handle = meshes.add(Mesh::from(shape::Quad::new(Vec2::new(
+    //     quad_width,
+    //     quad_width * 0.25,
+    // ))));
+
+    // let material = materials.add(StandardMaterial {
+    //     base_color_texture: Some(texture_handle),
+    //     alpha_mode: AlphaMode::Blend,
+    //     unlit: true,
+    //     ..default()
+    // });
+
+    // commands.spawn(PbrBundle {
+    //     mesh: quad_handle.clone(),
+    //     material: material,
+    //     transform: Transform::from_xyz(0.0, 0.0, 10.0),
+    //     ..Default::default()
+    // });
 
     {
         // let data = std::fs::read("ex/ctf_2fort.bsp").unwrap();
@@ -165,14 +188,12 @@ fn setup(
                 } else {
                     let texture_name = texture_info.name();
                     // let texture = vpk.load_texture(&mut images, texture_name);
-                    let texture = loaded_textures.load_texture(
-                        &mut vpk,
-                        Some(&map),
-                        &mut images,
-                        texture_name,
-                    );
+                    let texture = loaded_textures
+                        .load_texture(&mut vpk, Some(&map), &mut images, texture_name)
+                        .unwrap();
 
-                    let (mesh, material) = create_basic_map_mesh(&map.bsp, face, color, texture);
+                    let (mesh, material) =
+                        create_basic_map_mesh(&map.bsp, face, color, Some(texture));
 
                     commands.spawn(PbrBundle {
                         mesh: meshes.add(mesh),
@@ -196,6 +217,8 @@ fn create_basic_map_mesh<'a>(
     texture: Option<Handle<Image>>,
 ) -> (Mesh, StandardMaterial) {
     let texture_info = face.texture();
+    let tex_width = texture_info.texture().width as f32;
+    let tex_height = texture_info.texture().height as f32;
 
     let normal = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
         [0.0, 0.0, 1.0]
@@ -204,8 +227,10 @@ fn create_basic_map_mesh<'a>(
         plane.normal.into()
     };
 
+    // TODO(minor): preallocate
     let mut face_triangles = Vec::new();
     let mut face_normals = Vec::new();
+    let mut face_uvs = Vec::new();
 
     let mut triangle_vert = 0;
     let mut triangle = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
@@ -233,14 +258,17 @@ fn create_basic_map_mesh<'a>(
             let vert = triangle[0];
             face_triangles.push(vert);
             face_normals.push(normal);
+            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
 
             let vert = triangle[1];
             face_triangles.push(vert);
             face_normals.push(normal);
+            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
 
             let vert = triangle[2];
             face_triangles.push(vert);
             face_normals.push(normal);
+            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
 
             triangle[1] = triangle[2];
             triangle_vert = 2;
@@ -250,24 +278,58 @@ fn create_basic_map_mesh<'a>(
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, face_triangles);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, face_normals);
+    // println!("UVs: {face_uvs:?}");
+    // panic!();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, face_uvs);
+    // TODO: lightmaps with UV_1?
 
     // Create the material
     let material = StandardMaterial {
-        base_color: color,
-        base_color_texture: texture,
+        // base_color: color,
+        base_color_texture: texture.clone(),
+        // alpha_mode: AlphaMode::Blend,
+        // unlit: true,
+        // emissive_texture: texture,
         alpha_mode: if color.a() < 1.0 {
             AlphaMode::Blend
         } else {
             AlphaMode::Opaque
         },
+        // TODO: might be needed since source uses DX
+        // flip_normal_map_y
+
         // unlit: true,
         // metallic: 0.0,
-        emissive: color,
+        // emissive: color,
+        // unlit: true,
         // reflectance: 0.0,
         ..Default::default()
     };
 
     (mesh, material)
+}
+
+fn calc_uv(
+    texture_info: &vbsp::TextureInfo,
+    vertex: [f32; 3],
+    tex_width: f32,
+    tex_height: f32,
+) -> [f32; 2] {
+    let scale = texture_info.texture_scale;
+    let transform = texture_info.texture_transform;
+
+    // let vertex = [vertex[0], vertex[2], -vertex[1]];
+
+    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] + scale[3];
+    let v = transform[0] * vertex[0]
+        + transform[1] * vertex[1]
+        + transform[2] * vertex[2]
+        + transform[3];
+
+    let u = u / tex_width;
+    let v = v / tex_height;
+
+    [u, v]
 }
 
 fn create_displacement_mesh<'a>(

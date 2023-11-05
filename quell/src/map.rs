@@ -33,7 +33,6 @@ impl GameMap {
         } else {
             Cow::Owned(format!("materials/{}.vmt", name))
         };
-        println!("Full name: {name:?}");
         let res = self.bsp.pack.get(&name).unwrap()?;
         Some((res, LSrc::Map))
     }
