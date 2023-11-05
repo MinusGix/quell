@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["quell"]
+members = ["quell", "vmt"]
 
 resolver = "2"
 

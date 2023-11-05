@@ -7,11 +7,18 @@ edition = "2021"
 
 [dependencies]
 bevy = { version = "0.12", features = ["dynamic_linking"] }
+eyre = "0.6.8"
+image = "0.24.7"
 # bevy_fly_camera = "0.8.0"
 # smooth-bevy-cameras = "0.7.0"
 smooth-bevy-cameras = "0.10.0"
 
 # Loading BSP map files
-vbsp = { git = "https://github.com/icewind1991/vbsp" }
+# vbsp = { git = "https://github.com/MinusGix/vbsp" }
+vbsp = { path = "../../vbsp" }
 # Loading VPK files (for textures/models)
 vpk = { git = "https://github.com/roman901/vpk-rs" }
+# For parsing VTF (for textures)
+# vtf = { git = "https://github.com/MinusGix/vtf-rs" }
+vtf = { path = "../../vtf-rs/" }
+vmt = { path = "../vmt/" }

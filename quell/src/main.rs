@@ -1,4 +1,5 @@
 mod data;
+pub mod map;
 
 use std::path::Path;
 
@@ -8,55 +9,33 @@ use bevy::{
     prelude::*,
     render::{
         mesh::Indices,
-        render_resource::PrimitiveTopology,
+        render_resource::{
+            Extent3d, PrimitiveTopology, Texture, TextureDescriptor, TextureDimension,
+            TextureFormat, TextureUsages,
+        },
         settings::{WgpuFeatures, WgpuSettings},
     },
+    utils::HashMap,
 };
-use data::VpkData;
+use data::{LoadedTextures, VpkData, VpkState};
+use image::DynamicImage;
+use map::GameMap;
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
     LookTransformPlugin,
 };
 use vbsp::{Bsp, DisplacementInfo};
 
-#[derive(Resource)]
-struct VpkState {
-    // TODO: should these even be named? Should we just have a general pool of vpks that we look at?
-    textures: VpkData,
-    misc: VpkData,
-}
-impl VpkState {
-    pub fn new() -> VpkState {
-        let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
-        let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
-        // TODO: sound
-        VpkState { textures, misc }
-    }
-
-    pub fn find_ignore_case(&self, name: &str) -> Option<&vpk::entry::VPKEntry> {
-        self.textures
-            .find_ignore_case(name)
-            .or_else(|| self.misc.find_ignore_case(name))
-    }
-}
-
 fn main() {
     let vpk = VpkState::new();
+    let loaded_textures = LoadedTextures::default();
 
-    // "TOOLS/TOOLSTRIGGER"
-    // "maps/ctf_2fort/glass/glasswindow001a_178_-2175_-39"
-    // "OVERLAYS/NO_ENTRY"
-    let tex = vpk
-        .find_ignore_case("materials/CONCRETE/CONCRETEWALL005.vtf")
-        .expect("Failed to get concrete wall");
-    let v = tex.get().unwrap();
-
-    // use std::io::Write;
-    // let root = &vpk.textures.data.tree;
-    // let mut out_file = std::fs::File::create("out.txt").unwrap();
-    // for (key, v) in root {
-    //     writeln!(out_file, "{}", key).unwrap();
-    // }
+    use std::io::Write;
+    let root = &vpk.misc.data.tree;
+    let mut out_file = std::fs::File::create("out2.txt").unwrap();
+    for (key, v) in root {
+        writeln!(out_file, "{}", key).unwrap();
+    }
 
     App::new()
         .insert_resource(Msaa::Sample4)
@@ -67,6 +46,8 @@ fn main() {
         //     ..Default::default()
         // })
         .insert_resource(vpk)
+        .insert_resource(loaded_textures)
+        // .insert_resource(None::<GameMap>)
         .add_plugins(DefaultPlugins)
         // .add_plugins(WireframePlugin)
         .add_plugins(LookTransformPlugin)
@@ -81,8 +62,11 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     // mut ambient_light: ResMut<AmbientLight>,
-    vpk: Res<VpkState>,
+    mut vpk: ResMut<VpkState>,
+    mut loaded_textures: ResMut<LoadedTextures>,
+    // mut map: Option<ResMut<GameMap>>,
 ) {
     // ambient_light.color = Color::WHITE;
     // ambient_light.brightness = 0.05;
@@ -112,33 +96,45 @@ fn setup(
         ));
 
     {
-        let data = std::fs::read("ex/ctf_2fort.bsp").unwrap();
-        let bsp = Bsp::read(&data).unwrap();
+        // let data = std::fs::read("ex/ctf_2fort.bsp").unwrap();
+        // let bsp = Bsp::read(&data).unwrap();
+        // map = Some(GameMap::from_path("ex/ctf_2fort.bsp").unwrap());
 
-        for model in bsp.models() {
+        // commands.insert_resource(GameMap::from_path("ex/ctf_2fort.bsp").unwrap());
+        // let map = map.as_ref().unwrap();
+        let map = GameMap::from_path("ex/ctf_2fort.bsp").unwrap();
+
+        // {
+        //     let mut out_file = std::fs::File::create("map_out.txt").unwrap();
+        //     let zip = map.bsp.pack.zip.lock().unwrap();
+        //     use std::io::Write;
+        //     for name in zip.file_names() {
+        //         writeln!(out_file, "{}", name).unwrap();
+        //     }
+        // };
+
+        for model in map.bsp.models() {
             for face in model.faces() {
-                let texture = face.texture();
-                let texture_data = texture.texture_data();
+                let texture_info = face.texture();
+                let texture_data = texture_info.texture_data();
 
-                if texture.flags.contains(vbsp::TextureFlags::NODRAW) {
+                if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
+                    continue;
+                } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
                     continue;
                 }
 
-                let texture_name = texture.name();
+                let texture_name = texture_info.name();
 
                 let reflect = texture_data.reflectivity;
-                let color = if texture.flags.contains(vbsp::TextureFlags::SKY) {
+                let color = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
                     Color::rgb(0.0, 0.0, 0.0)
                 } else {
                     if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
                         continue;
                     }
 
-                    // if !texture_name.contains("CONCRETE") {
-                    //     println!("texture: {}", texture_name);
-                    // }
-
-                    let alpha = if texture.flags.contains(vbsp::TextureFlags::TRANS) {
+                    let alpha = if texture_info.flags.contains(vbsp::TextureFlags::TRANS) {
                         0.2
                     } else {
                         1.0
@@ -155,7 +151,7 @@ fn setup(
                 };
 
                 if let Some(disp) = face.displacement() {
-                    let (mesh, material) = create_displacement_mesh(&bsp, face, disp, color);
+                    let (mesh, material) = create_displacement_mesh(&map.bsp, face, disp, color);
 
                     commands.spawn(PbrBundle {
                         mesh: meshes.add(mesh),
@@ -163,7 +159,16 @@ fn setup(
                         ..Default::default()
                     });
                 } else {
-                    let (mesh, material) = create_basic_map_mesh(&bsp, face, color);
+                    let texture_name = texture_info.name();
+                    // let texture = vpk.load_texture(&mut images, texture_name);
+                    let texture = loaded_textures.load_texture(
+                        &mut vpk,
+                        Some(&map),
+                        &mut images,
+                        texture_name,
+                    );
+
+                    let (mesh, material) = create_basic_map_mesh(&map.bsp, face, color, texture);
 
                     commands.spawn(PbrBundle {
                         mesh: meshes.add(mesh),
@@ -173,6 +178,8 @@ fn setup(
                 }
             }
         }
+
+        commands.insert_resource(map);
     }
 }
 
@@ -182,9 +189,11 @@ fn create_basic_map_mesh<'a>(
     bsp: &'a Bsp,
     face: vbsp::Handle<'a, vbsp::Face>,
     color: Color,
+    texture: Option<Handle<Image>>,
 ) -> (Mesh, StandardMaterial) {
-    let texture = face.texture();
-    let normal = if texture.flags.contains(vbsp::TextureFlags::SKY) {
+    let texture_info = face.texture();
+
+    let normal = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
         [0.0, 0.0, 1.0]
     } else {
         let plane = bsp.planes.get(face.plane_num as usize).unwrap();
@@ -238,8 +247,10 @@ fn create_basic_map_mesh<'a>(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, face_triangles);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, face_normals);
 
+    // Create the material
     let material = StandardMaterial {
         base_color: color,
+        base_color_texture: texture,
         alpha_mode: if color.a() < 1.0 {
             AlphaMode::Blend
         } else {
