@@ -1,6 +1,9 @@
+mod data;
+
 use std::path::Path;
 
 use bevy::{
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::wireframe::{Wireframe, WireframePlugin},
     prelude::*,
     render::{
@@ -9,26 +12,68 @@ use bevy::{
         settings::{WgpuFeatures, WgpuSettings},
     },
 };
+use data::VpkData;
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
     LookTransformPlugin,
 };
 use vbsp::{Bsp, DisplacementInfo};
 
+#[derive(Resource)]
+struct VpkState {
+    // TODO: should these even be named? Should we just have a general pool of vpks that we look at?
+    textures: VpkData,
+    misc: VpkData,
+}
+impl VpkState {
+    pub fn new() -> VpkState {
+        let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
+        let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
+        // TODO: sound
+        VpkState { textures, misc }
+    }
+
+    pub fn find_ignore_case(&self, name: &str) -> Option<&vpk::entry::VPKEntry> {
+        self.textures
+            .find_ignore_case(name)
+            .or_else(|| self.misc.find_ignore_case(name))
+    }
+}
+
 fn main() {
+    let vpk = VpkState::new();
+
+    // "TOOLS/TOOLSTRIGGER"
+    // "maps/ctf_2fort/glass/glasswindow001a_178_-2175_-39"
+    // "OVERLAYS/NO_ENTRY"
+    let tex = vpk
+        .find_ignore_case("materials/CONCRETE/CONCRETEWALL005.vtf")
+        .expect("Failed to get concrete wall");
+    let v = tex.get().unwrap();
+
+    // use std::io::Write;
+    // let root = &vpk.textures.data.tree;
+    // let mut out_file = std::fs::File::create("out.txt").unwrap();
+    // for (key, v) in root {
+    //     writeln!(out_file, "{}", key).unwrap();
+    // }
+
     App::new()
-        .insert_resource(Msaa { samples: 4 })
+        .insert_resource(Msaa::Sample4)
         // .insert_resource(ClearColor(Color::rgb(0.1, 0.2, 0.3)))
         // .insert_resource(WgpuSettings {
         //     // Wireframe
         //     features: WgpuFeatures::POLYGON_MODE_LINE,
         //     ..Default::default()
         // })
+        .insert_resource(vpk)
         .add_plugins(DefaultPlugins)
-        .add_plugin(LookTransformPlugin)
-        .add_plugin(WireframePlugin)
-        .add_plugin(UnrealCameraPlugin::default())
-        .add_startup_system(setup)
+        // .add_plugins(WireframePlugin)
+        .add_plugins(LookTransformPlugin)
+        .add_plugins(UnrealCameraPlugin::default())
+        .add_plugins(LogDiagnosticsPlugin::default())
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_systems(Startup, setup)
         .run();
 }
 
@@ -37,6 +82,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     // mut ambient_light: ResMut<AmbientLight>,
+    vpk: Res<VpkState>,
 ) {
     // ambient_light.color = Color::WHITE;
     // ambient_light.brightness = 0.05;
@@ -412,12 +458,12 @@ fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     [norm[0] / len, norm[1] / len, norm[2] / len]
 }
 
-fn pick_color(name: &str, x: f32) -> u32 {
-    // TODO: more colors
-    let col = 77550;
+// fn pick_color(name: &str, x: f32) -> u32 {
+//     // TODO: more colors
+//     let col = 77550;
 
-    col
-}
+//     col
+// }
 
 /// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
 fn rotate(v: [f32; 3]) -> [f32; 3] {
