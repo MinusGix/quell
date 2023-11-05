@@ -5,7 +5,7 @@ pub enum VMTError {
     NoStringStart,
     NoStringEnd,
 
-    Expected(u8),
+    Expected(char),
 
     InvalidBlendMode(u8),
 
@@ -275,11 +275,11 @@ pub struct VMTDetail2<'a> {
 
 fn expect_char(bytes: &[u8], c: u8) -> Result<&[u8], VMTError> {
     if bytes.is_empty() {
-        return Err(VMTError::Expected(c));
+        return Err(VMTError::Expected(c as char));
     }
 
     if bytes[0] != c {
-        return Err(VMTError::Expected(c));
+        return Err(VMTError::Expected(c as char));
     }
 
     Ok(&bytes[1..])
