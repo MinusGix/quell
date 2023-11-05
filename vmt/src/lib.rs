@@ -200,7 +200,7 @@ pub struct VMT<'a> {
     pub surface_prop: Option<Cow<'a, str>>,
     pub detail: VMTDetail<'a>,
     pub detail2: VMTDetail2<'a>,
-    pub base_texture_transform: Option<[f32; 2]>,
+    pub base_texture_transform: Option<Cow<'a, str>>,
     pub color: Option<RGB>,
 
     // TODO: detail texture transform
@@ -361,8 +361,7 @@ impl<'a> VMT<'a> {
                     } else if k.eq_ignore_ascii_case(b"$decal") {
                         vmt.decal = Some(val.parse()?);
                     } else if k.eq_ignore_ascii_case(b"$basetexturetransform") {
-                        let (_, val) = take_vec2(val.as_bytes())?;
-                        vmt.base_texture_transform = Some(val);
+                        vmt.base_texture_transform = Some(Cow::Borrowed(val));
                     } else if k.eq_ignore_ascii_case(b"$color") {
                         let (_, val) = take_vec3(val.as_bytes())?;
                         vmt.color = Some(val);
