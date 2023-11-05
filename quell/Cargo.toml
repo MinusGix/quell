@@ -17,7 +17,8 @@ smooth-bevy-cameras = "0.10.0"
 # vbsp = { git = "https://github.com/MinusGix/vbsp" }
 vbsp = { path = "../../vbsp" }
 # Loading VPK files (for textures/models)
-vpk = { git = "https://github.com/roman901/vpk-rs" }
+# vpk = { git = "https://github.com/MinusGix/vpk-rs" }
+vpk = { path = "../../vpk-rs" }
 # For parsing VTF (for textures)
 # vtf = { git = "https://github.com/MinusGix/vtf-rs" }
 vtf = { path = "../../vtf-rs/" }

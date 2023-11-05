@@ -3696,7 +3696,6 @@ version = "0.1.0"
 [[package]]
 name = "vpk"
 version = "0.1.4"
-source = "git+https://github.com/roman901/vpk-rs#bd6bdab727d81adc16f7ef38112cbf613ecd9bbd"
 dependencies = [
  "binread",
  "thiserror",

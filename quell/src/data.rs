@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, path::Path};
 
 use bevy::{
     prelude::{Assets, Handle, Image, Resource},
@@ -133,6 +133,35 @@ impl LoadedTextures {
     }
 }
 
+pub enum GameId {
+    Tf2,
+    Hl2,
+    // TODO: more
+    Custom {
+        /// Ex: `tf`
+        folder: String,
+        /// Ex: `tf2`
+        prefix: String,
+    },
+}
+impl GameId {
+    pub fn folder(&self) -> &str {
+        match self {
+            GameId::Tf2 => "tf",
+            GameId::Hl2 => "hl2",
+            GameId::Custom { folder, .. } => folder,
+        }
+    }
+
+    pub fn prefix(&self) -> &str {
+        match self {
+            GameId::Tf2 => "tf2",
+            GameId::Hl2 => "hl2",
+            GameId::Custom { prefix, .. } => prefix,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct VpkState {
     pub hl2_textures: VpkData,
@@ -142,19 +171,57 @@ pub struct VpkState {
     pub misc: VpkData,
 }
 impl VpkState {
-    pub fn new() -> VpkState {
-        let hl2_textures = VpkData::load("./ex/tf/hl2/hl2_textures_dir.vpk").unwrap();
-        let hl2_misc = VpkData::load("./ex/tf/hl2/hl2_misc_dir.vpk").unwrap();
-        let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
-        let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
+    /// Create a new [`VpkState`] from the path to the game folder.  
+    /// Ex: `C:\Program Files (x86)\Steam\steamapps\common\Team Fortress 2\`  
+    /// `game_part` should be the name of the game-specific folder data, like `tf`
+    pub fn new(root_path: impl AsRef<Path>, game_id: GameId) -> eyre::Result<VpkState> {
+        // TODO: for hl2 this would end up loading things multiple times
+        let root_path = root_path.as_ref();
+        let hl2_path = root_path.join(GameId::Hl2.folder());
+        let game_path = root_path.join(game_id.folder());
+
+        let hl2_textures = VpkData::load(hl2_path.join("hl2_textures_dir.vpk"))?;
+        let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"))?;
+        let textures =
+            VpkData::load(game_path.join(format!("{}_textures_dir.vpk", game_id.prefix())))?;
+        let misc = VpkData::load(game_path.join(format!("{}_misc_dir.vpk", game_id.prefix())))?;
+
         // TODO: sound
-        VpkState {
+        Ok(VpkState {
             hl2_textures,
             hl2_misc,
             textures,
             misc,
-        }
+        })
     }
+
+    // pub fn new_paths(
+    //     hl2_path: impl AsRef<Path>,
+    //     game_path: impl AsRef<Path>,
+    //     game_id: GameId,
+    // ) -> eyre::Result<VpkState> {
+    //     // let hl2_textures = VpkData::load("./ex/tf/hl2/hl2_textures_dir.vpk").unwrap();
+    //     // let hl2_misc = VpkData::load("./ex/tf/hl2/hl2_misc_dir.vpk").unwrap();
+    //     // let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
+    //     // let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
+    //     let hl2_path = hl2_path.as_ref();
+    //     let game_path = game_path.as_ref();
+
+    //     let hl2_textures = VpkData::load(hl2_path.join("hl2_textures_dir.vpk"))?;
+    //     let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"))?;
+    //     let textures = VpkData::load(game_path.join(format!(
+    //         "{}_textures_dir.vpk",
+    //         game_path.file_name().unwrap().to_str().unwrap()
+    //     )))?;
+
+    //     // TODO: sound
+    //     Ok(VpkState {
+    //         hl2_textures,
+    //         hl2_misc,
+    //         textures,
+    //         misc,
+    //     })
+    // }
 
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
@@ -232,7 +299,7 @@ pub struct VpkData {
 }
 impl VpkData {
     // TODO: use paths
-    pub fn load(path: &str) -> Result<VpkData, vpk::Error> {
+    pub fn load(path: impl AsRef<Path>) -> Result<VpkData, vpk::Error> {
         let data = vpk::from_path(path)?;
         Ok(VpkData { data })
     }

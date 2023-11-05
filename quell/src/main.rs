@@ -26,16 +26,20 @@ use smooth_bevy_cameras::{
 };
 use vbsp::{Bsp, DisplacementInfo};
 
+use crate::data::GameId;
+
 fn main() {
-    let vpk = VpkState::new();
+    let game_id = GameId::Tf2;
+    let root_path = "./ex/tf/";
+    let vpk = VpkState::new(root_path, game_id).expect("Failed to load VPKs for the game");
     let loaded_textures = LoadedTextures::default();
 
-    use std::io::Write;
-    let root = &vpk.misc.data.tree;
-    let mut out_file = std::fs::File::create("out2.txt").unwrap();
-    for (key, v) in root {
-        writeln!(out_file, "{}", key).unwrap();
-    }
+    // use std::io::Write;
+    // let root = &vpk.misc.data.tree;
+    // let mut out_file = std::fs::File::create("out2.txt").unwrap();
+    // for (key, v) in root {
+    //     writeln!(out_file, "{}", key).unwrap();
+    // }
 
     App::new()
         .insert_resource(Msaa::Sample4)
