@@ -464,3 +464,151 @@ impl<'a> VMTDetail2<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{ShaderName, VMTSub, VMTSubs};
+
+    use super::VMT;
+
+    #[test]
+    fn test_basic_vmt() {
+        // Empty
+        let text = r#""LightmappedGeneric" {}"#;
+        let vmt = VMT::from_bytes(text.as_bytes()).unwrap();
+
+        assert_eq!(vmt.shader_name, ShaderName::LightmappedGeneric);
+
+        // Simple
+        let text = r#""LightmappedGeneric"
+        {
+            "$basetexture" "Thing/thingy001"
+            "$envmap" "env_cubemap"
+            "$basealphaenvmapmask" 1
+            "$surfaceprop" "metal"
+            "%keywords" "test"
+        }
+        "#;
+
+        let vmt = VMT::from_bytes(text.as_bytes()).unwrap();
+        assert_eq!(vmt.shader_name, ShaderName::LightmappedGeneric);
+        assert_eq!(vmt.base_texture, Some("Thing/thingy001".into()));
+        assert_eq!(vmt.keywords, Some("test".into()));
+        assert_eq!(vmt.other.get("$envmap"), Some(&"env_cubemap"));
+        assert_eq!(vmt.other.get("$basealphaenvmapmask"), Some(&"1"));
+        assert_eq!(vmt.surface_prop, Some("metal".into()));
+
+        // Simple + Comments
+        let text = r#""LightmappedGeneric"
+        {
+            "$basetexture" "Thing/thingy001"
+            // "$envmap" "env_cubemap"
+            "$basealphaenvmapmask" 1 // thingy
+            "$surfaceprop" "metal"
+            "%keywords" "test"
+        }
+        "#;
+
+        let vmt = VMT::from_bytes(text.as_bytes()).unwrap();
+        assert_eq!(vmt.shader_name, ShaderName::LightmappedGeneric);
+        assert_eq!(vmt.base_texture, Some("Thing/thingy001".into()));
+        assert_eq!(vmt.keywords, Some("test".into()));
+        assert_eq!(vmt.other.get("$basealphaenvmapmask"), Some(&"1"));
+        assert_eq!(vmt.surface_prop, Some("metal".into()));
+    }
+
+    #[test]
+    fn test_sub_vmt() {
+        let text = r#""Water"
+        {
+                "Water_DX60"
+                {
+                        "$fallbackmaterial" "nature/blah"
+                }
+        
+                "Proxies"
+                {
+                        "AnimatedTexture"
+                        {
+                                "animatedtexturevar" "$normalmap"
+                                "animatedtextureframenumvar" "$bumpframe"
+                                "animatedtextureframerate" 24.00
+                        }
+        
+                        "TextureScroll"
+                        {
+                                "texturescrollvar" "$bumptransform"
+                                "texturescrollrate" .05
+                                "texturescrollangle" 45.00
+                        }
+        
+                        "WaterLOD"
+                        {
+                        }
+                }
+        }"#;
+
+        let vmt = VMT::from_bytes(text.as_bytes()).unwrap();
+
+        assert_eq!(vmt.shader_name, ShaderName::String("Water".into()));
+        assert_eq!(vmt.sub.0.len(), 2);
+        println!("{:#?}", vmt.sub.0);
+        assert_eq!(
+            vmt.sub.0.get("water_dx60"),
+            Some(&VMTSub::Sub(VMTSubs {
+                0: vec![(
+                    "$fallbackmaterial".into(),
+                    VMTSub::Val("nature/blah".into())
+                )]
+                .into_iter()
+                .collect()
+            }))
+        );
+        assert_eq!(
+            vmt.sub.0.get("proxies"),
+            Some(&VMTSub::Sub(VMTSubs {
+                0: vec![
+                    (
+                        "animatedtexture".into(),
+                        VMTSub::Sub(VMTSubs {
+                            0: vec![
+                                (
+                                    "animatedtexturevar".into(),
+                                    VMTSub::Val("$normalmap".into())
+                                ),
+                                (
+                                    "animatedtextureframenumvar".into(),
+                                    VMTSub::Val("$bumpframe".into())
+                                ),
+                                (
+                                    "animatedtextureframerate".into(),
+                                    VMTSub::Val("24.00".into())
+                                ),
+                            ]
+                            .into_iter()
+                            .collect()
+                        })
+                    ),
+                    (
+                        "texturescroll".into(),
+                        VMTSub::Sub(VMTSubs {
+                            0: vec![
+                                (
+                                    "texturescrollvar".into(),
+                                    VMTSub::Val("$bumptransform".into())
+                                ),
+                                ("texturescrollrate".into(), VMTSub::Val(".05".into())),
+                                ("texturescrollangle".into(), VMTSub::Val("45.00".into())),
+                            ]
+                            .into_iter()
+                            .collect()
+                        })
+                    ),
+                    ("waterlod".into(), VMTSub::Sub(VMTSubs::default())),
+                ]
+                .into_iter()
+                .collect()
+            }))
+        );
+    }
+}
