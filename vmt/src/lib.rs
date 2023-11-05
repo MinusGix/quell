@@ -476,8 +476,6 @@ impl<'a> VMTSubs<'a> {
 }
 impl<'a> std::fmt::Debug for VMTSubs<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // We have to make the keys readable as str
-
         let mut map = f.debug_map();
 
         for (k, v) in &self.0 {
@@ -489,7 +487,7 @@ impl<'a> std::fmt::Debug for VMTSubs<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum VMTSub<'a> {
     Val(Cow<'a, str>),
     Sub(VMTSubs<'a>),
@@ -509,12 +507,34 @@ impl<'a> VMTSub<'a> {
         }
     }
 }
+impl<'a> std::fmt::Debug for VMTSub<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VMTSub::Val(v) => write!(f, "{v:?}",),
+            VMTSub::Sub(v) => write!(f, "{v:?}"),
+        }
+    }
+}
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Default, Clone, PartialEq)]
 pub struct VMTOther<'a>(pub HashMap<Cow<'a, [u8]>, Cow<'a, str>>);
 impl<'a> VMTOther<'a> {
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<&str> {
         self.0.get(key.as_ref()).map(|v| v.as_ref())
+    }
+}
+impl<'a> std::fmt::Debug for VMTOther<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // We have to make the keys readable as str
+
+        let mut map = f.debug_map();
+
+        for (k, v) in &self.0 {
+            let k = std::str::from_utf8(k).unwrap_or("<invalid utf8>");
+            map.entry(&k, v);
+        }
+
+        map.finish()
     }
 }
 
