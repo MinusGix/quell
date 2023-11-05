@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap};
 
 #[derive(Debug, Clone)]
-pub enum VMTError {
+pub enum VMTError<E = ()> {
     NoStringStart,
     NoStringEnd,
 
@@ -13,6 +13,8 @@ pub enum VMTError {
     FloatParse(std::num::ParseFloatError),
     IntParse(std::num::ParseIntError),
     BoolParse(std::str::ParseBoolError),
+
+    Other(E),
 }
 impl From<std::str::Utf8Error> for VMTError {
     fn from(e: std::str::Utf8Error) -> VMTError {
@@ -42,6 +44,7 @@ pub enum ShaderName<'a> {
     UnlitGeneric,
     VertexLitGeneric,
     // ?
+    // Patch?
 }
 impl<'a> From<&'a str> for ShaderName<'a> {
     fn from(s: &str) -> ShaderName {
@@ -142,10 +145,91 @@ pub struct VMT<'a> {
     pub lightwarp_texture: Option<TextureStr<'a>>,
 
     pub keywords: Option<Cow<'a, str>>,
+
+    pub include: Option<Cow<'a, str>>,
+
     // TODO: is this some sort of enum?
     pub other: HashMap<Cow<'a, str>, &'a str>,
+    pub sub: VMTSubs<'a>,
 }
 impl<'a> VMT<'a> {
+    /// Apply another VMT ontop of this, overwriting any fields the other sets.  
+    /// Currently skips shader name, unsure if that should change.
+    pub fn apply<'b>(self, o: &VMT<'b>) -> VMT<'b>
+    where
+        'a: 'b,
+    {
+        VMT {
+            shader_name: self.shader_name,
+            base_texture: apply(self.base_texture, &o.base_texture),
+            decal: o.decal.or(self.decal),
+            surface_prop: apply(self.surface_prop, &o.surface_prop),
+            detail: self.detail.apply(&o.detail),
+            detail2: self.detail2.apply(&o.detail2),
+            base_texture_transform: apply(self.base_texture_transform, &o.base_texture_transform),
+            color: apply(self.color, &o.color),
+            phong: o.phong.or(self.phong),
+            phong_boost: o.phong_boost.or(self.phong_boost),
+            phong_exponent: o.phong_exponent.or(self.phong_exponent),
+            phong_fresnel_ranges: apply(self.phong_fresnel_ranges, &o.phong_fresnel_ranges),
+            lightwarp_texture: apply(self.lightwarp_texture, &o.lightwarp_texture),
+            keywords: apply(self.keywords, &o.keywords),
+            include: apply(self.include, &o.include),
+            other: {
+                let mut other = self.other;
+                other.extend(o.other.iter().map(|(k, v)| (k.clone(), *v)));
+                other
+            },
+            sub: self.sub.apply(&o.sub),
+        }
+    }
+
+    /// Resolve any include statements.  
+    /// Must be given a function to load another vmt, it is then merged with this VMT.
+    pub fn resolve<'b, E>(
+        self,
+        load: impl FnOnce(&str) -> Result<VMT<'b>, E>,
+    ) -> Result<VMT<'b>, VMTError<E>>
+    where
+        'a: 'b,
+    {
+        let Some(include) = &self.include else {
+            return Ok(self);
+        };
+
+        let vmt = load(include).map_err(VMTError::Other)?;
+
+        let has_include = vmt.include.is_some();
+
+        let mut vmt = vmt.apply(&self);
+
+        if !has_include {
+            // if it doesn't have an include beforehand, we just remove it from the resolved/merged
+            // vmt.
+            vmt.include = None;
+        }
+
+        Ok(vmt)
+    }
+
+    pub fn resolve_recurse<'b, E>(
+        self,
+        mut load: impl FnMut(&str) -> Result<VMT<'b>, E>,
+    ) -> Result<VMT<'b>, VMTError<E>>
+    where
+        'a: 'b,
+    {
+        let mut vmt = self;
+        loop {
+            vmt = vmt.resolve(&mut load)?;
+            if vmt.include.is_none() {
+                break;
+            }
+        }
+
+        Ok(vmt)
+    }
+
     pub fn from_bytes(b: &'a [u8]) -> Result<VMT<'a>, VMTError> {
         let (b, shader_name) = take_text(b)?;
         let shader_name = ShaderName::from(shader_name);
@@ -166,11 +250,22 @@ impl<'a> VMT<'a> {
                 break;
             }
 
+            if b.is_empty() {
+                return Err(VMTError::Expected('}'));
+            }
+
             let (b, key_name) = take_text(b)?;
 
             let b = take_whitespace(b)?;
 
-            // TODO: are they all string quoted?
+            if b.starts_with(b"{") {
+                let b = parse_sub(b, key_name, &mut vmt.sub)?;
+
+                b_out = b;
+
+                continue;
+            }
+
             let (b, val) = take_text(b)?;
 
             let b = take_whitespace(b)?;
@@ -231,8 +326,13 @@ impl<'a> VMT<'a> {
                 vmt.phong_fresnel_ranges = Some(val);
             } else if k.eq_ignore_ascii_case(b"$lightwarptexture") {
                 vmt.lightwarp_texture = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"include") {
+                vmt.include = Some(Cow::Borrowed(val));
             } else {
-                vmt.other.insert(Cow::Borrowed(key_name), val);
+                // Convert key name to lowercase, but only allocate a string if we *have* to
+                let key_name = to_lowercase_cow(key_name);
+
+                vmt.other.insert(key_name, val);
             }
 
             b_out = b;
@@ -240,10 +340,11 @@ impl<'a> VMT<'a> {
 
         let b = b_out;
 
-        let _b = expect_char(b, b'}')?;
+        let b = expect_char(b, b'}')?;
 
         // typically should be empty by now.
-        // let _b = take_whitespace(b)?;
+        let b = take_whitespace(b)?;
+        assert!(b.is_empty(), "b: {:?}", std::str::from_utf8(b));
 
         Ok(vmt)
     }
@@ -265,9 +366,29 @@ impl<'a> Default for VMT<'a> {
             phong_exponent: None,
             phong_fresnel_ranges: None,
             lightwarp_texture: None,
+            include: None,
             other: HashMap::new(),
+            sub: VMTSubs::default(),
         }
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct VMTSubs<'a>(pub HashMap<Cow<'a, str>, VMTSub<'a>>);
+impl<'a> VMTSubs<'a> {
+    pub fn apply<'b>(self, _o: &VMTSubs<'b>) -> VMTSubs<'b>
+    where
+        'a: 'b,
+    {
+        // TODO: actually apply subs
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VMTSub<'a> {
+    Val(Cow<'a, str>),
+    Sub(VMTSubs<'a>),
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -281,6 +402,22 @@ pub struct VMTDetail<'a> {
     pub blend_mode: Option<DetailBlendMode>,
     pub blend_factor: Option<f32>,
 }
+impl<'a> VMTDetail<'a> {
+    pub fn apply<'b>(self, o: &VMTDetail<'b>) -> VMTDetail<'b>
+    where
+        'a: 'b,
+    {
+        VMTDetail {
+            texture: apply(self.texture, &o.texture),
+            tint: o.tint.or(self.tint),
+            frame: o.frame.or(self.frame),
+            scale: o.scale.or(self.scale),
+            alpha_mask_base_texture: o.alpha_mask_base_texture.or(self.alpha_mask_base_texture),
+            blend_mode: o.blend_mode.or(self.blend_mode),
+            blend_factor: o.blend_factor.or(self.blend_factor),
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct VMTDetail2<'a> {
@@ -290,6 +427,81 @@ pub struct VMTDetail2<'a> {
     pub blend_factor: Option<f32>,
     pub frame: Option<u32>,
     pub tint: Option<RGB>,
+}
+impl<'a> VMTDetail2<'a> {
+    pub fn apply<'b>(self, o: &VMTDetail2<'b>) -> VMTDetail2<'b>
+    where
+        'a: 'b,
+    {
+        VMTDetail2 {
+            texture: apply(self.texture, &o.texture),
+            scale: o.scale.or(self.scale),
+            blend_factor: o.blend_factor.or(self.blend_factor),
+            frame: o.frame.or(self.frame),
+            tint: o.tint.or(self.tint),
+        }
+    }
+}
+
+fn apply<T: Clone>(a: Option<T>, b: &Option<T>) -> Option<T> {
+    if let Some(b) = b {
+        Some(b.clone())
+    } else {
+        a
+    }
+}
+
+fn parse_sub<'a>(b: &'a [u8], key: &'a str, root: &mut VMTSubs<'a>) -> Result<&'a [u8], VMTError> {
+    let b = expect_char(b, b'{')?;
+    let b = take_whitespace(b)?;
+
+    let mut sub = VMTSubs::default();
+
+    let mut b_cur = b;
+    loop {
+        let b = b_cur;
+
+        if b.starts_with(b"}") {
+            break;
+        }
+
+        if b.is_empty() {
+            return Err(VMTError::Expected('}'));
+        }
+
+        let (b, key_name) = take_text(b)?;
+
+        let b = take_whitespace(b)?;
+
+        if b.starts_with(b"{") {
+            let b = parse_sub(b, key_name, &mut sub)?;
+
+            b_cur = b;
+
+            continue;
+        }
+
+        let (b, val) = take_text(b)?;
+
+        let b = take_whitespace(b)?;
+
+        let key_name = to_lowercase_cow(key_name);
+
+        sub.0.insert(key_name, VMTSub::Val(Cow::Borrowed(val)));
+
+        let b = take_whitespace(b)?;
+
+        b_cur = b;
+    }
+
+    let b = b_cur;
+    let b = expect_char(b, b'}')?;
+    let b = take_whitespace(b)?;
+
+    let key = to_lowercase_cow(key);
+    root.0.insert(key, VMTSub::Sub(sub));
+
+    Ok(b)
 }
 
 fn expect_char(bytes: &[u8], c: u8) -> Result<&[u8], VMTError> {
@@ -384,6 +596,14 @@ fn take_vec3(bytes: &[u8]) -> Result<(&[u8], [f32; 3]), VMTError> {
     let z = z.parse()?;
 
     Ok((b, [x, y, z]))
+}
+
+fn to_lowercase_cow(text: &str) -> Cow<'_, str> {
+    if text.chars().any(|c| c.is_ascii_uppercase()) {
+        Cow::Owned(text.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 #[cfg(test)]
