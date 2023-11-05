@@ -47,22 +47,59 @@ impl From<std::num::ParseIntError> for VMTError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum ShaderName<'a> {
     String(Cow<'a, str>),
     LightmappedGeneric,
     UnlitGeneric,
     VertexLitGeneric,
     // ?
-    // Patch?
+    Water,
+    Patch,
+}
+impl<'a> ShaderName<'a> {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ShaderName::String(s) => s,
+            ShaderName::LightmappedGeneric => "LightmappedGeneric",
+            ShaderName::UnlitGeneric => "UnlitGeneric",
+            ShaderName::VertexLitGeneric => "VertexLitGeneric",
+            ShaderName::Water => "Water",
+            ShaderName::Patch => "Patch",
+        }
+    }
 }
 impl<'a> From<&'a str> for ShaderName<'a> {
     fn from(s: &str) -> ShaderName {
-        match s {
-            "LightmappedGeneric" => ShaderName::LightmappedGeneric,
-            "UnlitGeneric" => ShaderName::UnlitGeneric,
-            "VertexLitGeneric" => ShaderName::VertexLitGeneric,
-            _ => ShaderName::String(Cow::Borrowed(s)),
+        if s.eq_ignore_ascii_case("LightmappedGeneric") {
+            ShaderName::LightmappedGeneric
+        } else if s.eq_ignore_ascii_case("UnlitGeneric") {
+            ShaderName::UnlitGeneric
+        } else if s.eq_ignore_ascii_case("VertexLitGeneric") {
+            ShaderName::VertexLitGeneric
+        } else if s.eq_ignore_ascii_case("Water") {
+            ShaderName::Water
+        } else if s.eq_ignore_ascii_case("Patch") {
+            ShaderName::Patch
+        } else {
+            // TODO: remove this
+            panic!("Unknown shader name: {:?}", s);
+            ShaderName::String(Cow::Borrowed(s))
+        }
+    }
+}
+impl<'a> PartialEq for ShaderName<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ShaderName::String(a), ShaderName::String(b)) => a.eq_ignore_ascii_case(b),
+            (ShaderName::LightmappedGeneric, ShaderName::LightmappedGeneric) => true,
+            (ShaderName::UnlitGeneric, ShaderName::UnlitGeneric) => true,
+            (ShaderName::VertexLitGeneric, ShaderName::VertexLitGeneric) => true,
+            (ShaderName::Water, ShaderName::Water) => true,
+            (ShaderName::Patch, ShaderName::Patch) => true,
+            (ShaderName::String(a), b) => a.eq_ignore_ascii_case(b.as_str()),
+            (a, ShaderName::String(b)) => a.as_str().eq_ignore_ascii_case(b),
+            _ => false,
         }
     }
 }
