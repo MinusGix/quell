@@ -67,7 +67,7 @@ impl LoadedTextures {
             // testing panic
             panic!("Could not load vmt: {name:?}");
         };
-        println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
+        // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
         let vmt = VMT::from_bytes(&vmt).unwrap();
         let mut tmp = None;
         // TODO: support resolving more than one level of vmt includes
@@ -77,19 +77,36 @@ impl LoadedTextures {
                     // testing panic
                     panic!("Could not load vmt: {name:?}");
                 };
+                // println!("Applying: {}", std::str::from_utf8(&vmt).unwrap());
                 tmp = Some(vmt);
-                // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
                 let vmt = VMT::from_bytes(tmp.as_ref().unwrap())?;
-                println!("Applying: {vmt:?}");
                 Ok(vmt)
             })
             .unwrap();
 
-        let Some(base_texture) = vmt.base_texture else {
-            // testing panic
-            panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
+        // TODO: fallback materials?
+        // TODO: normal maps
+        // TODO: bump maps
+        let base_texture = match &vmt.shader_name {
+            vmt::ShaderName::Water => {
+                // TODO: water has things like refract texture and the normal map
+                if let Some(base_texture) = &vmt.base_texture {
+                    base_texture.as_ref()
+                } else if let Some(tool_texture) = vmt.other.get(b"%tooltexture") {
+                    tool_texture
+                } else {
+                    panic!("Could not find water texture in vmt: {name:?}; vmt: {vmt:#?}");
+                }
+            }
+            _ => {
+                let Some(base_texture) = &vmt.base_texture else {
+                    panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
+                };
+                base_texture.as_ref()
+            }
         };
-        println!("Base texture: {base_texture:?}");
+
+        // println!("Base texture: {base_texture:?}");
 
         let Some((image, image_src)) = load_texture(vpk, map, &base_texture) else {
             // testing panic
@@ -194,34 +211,6 @@ impl VpkState {
             misc,
         })
     }
-
-    // pub fn new_paths(
-    //     hl2_path: impl AsRef<Path>,
-    //     game_path: impl AsRef<Path>,
-    //     game_id: GameId,
-    // ) -> eyre::Result<VpkState> {
-    //     // let hl2_textures = VpkData::load("./ex/tf/hl2/hl2_textures_dir.vpk").unwrap();
-    //     // let hl2_misc = VpkData::load("./ex/tf/hl2/hl2_misc_dir.vpk").unwrap();
-    //     // let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
-    //     // let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
-    //     let hl2_path = hl2_path.as_ref();
-    //     let game_path = game_path.as_ref();
-
-    //     let hl2_textures = VpkData::load(hl2_path.join("hl2_textures_dir.vpk"))?;
-    //     let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"))?;
-    //     let textures = VpkData::load(game_path.join(format!(
-    //         "{}_textures_dir.vpk",
-    //         game_path.file_name().unwrap().to_str().unwrap()
-    //     )))?;
-
-    //     // TODO: sound
-    //     Ok(VpkState {
-    //         hl2_textures,
-    //         hl2_misc,
-    //         textures,
-    //         misc,
-    //     })
-    // }
 
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
@@ -351,15 +340,6 @@ fn load_texture(
     map: Option<&GameMap>,
     name: &str,
 ) -> Option<(image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, LSrc)> {
-    // let Some((tex, src)) = vpk.find_texture(name) else {
-    //     panic!("Failed to find texture {name:?}");
-    // };
-    // println!("Loaded texture: {}", name);
-    // // TODO: check what possible errors could occur
-    // let tex = tex.get().unwrap();
-    // let tex = vtf::from_bytes(&tex).unwrap();
-    // let image = tex.highres_image.decode(0).unwrap();
-    // Some((image.into_rgba8(), src))
     let (tex, src) = find_texture(vpk, map, name)?;
     let tex = vtf::from_bytes(&tex).unwrap();
     let image = tex.highres_image.decode(0).unwrap();
