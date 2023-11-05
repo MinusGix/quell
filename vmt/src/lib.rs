@@ -141,7 +141,7 @@ pub struct VMT<'a> {
 
     pub lightwarp_texture: Option<TextureStr<'a>>,
 
-    pub keywords: Vec<Cow<'a, str>>,
+    pub keywords: Option<Cow<'a, str>>,
     // TODO: is this some sort of enum?
     pub other: HashMap<Cow<'a, str>, &'a str>,
 }
@@ -159,67 +159,86 @@ impl<'a> VMT<'a> {
         let mut vmt = VMT::default();
         vmt.shader_name = shader_name;
 
-        let (b, key_name) = take_text(b)?;
+        let mut b_out = b;
+        loop {
+            let b = b_out;
+            if b.starts_with(b"}") {
+                break;
+            }
 
-        let b = take_whitespace(b)?;
+            let (b, key_name) = take_text(b)?;
 
-        // TODO: are they all string quoted?
-        let (b, val) = take_text(b)?;
+            let b = take_whitespace(b)?;
 
-        let b = take_whitespace(b)?;
+            // TODO: are they all string quoted?
+            let (b, val) = take_text(b)?;
 
-        // TODO: add checks for duplicate key values?
-        match key_name {
-            "$basetexture" => vmt.base_texture = Some(Cow::Borrowed(val)),
-            // TODO: is it space separated or?
-            "%keywords" => todo!(),
-            "$detail" => vmt.detail.texture = Some(Cow::Borrowed(val)),
-            "$detailscale" => vmt.detail.scale = Some(val.parse()?),
-            "$detailblendmode" => {
+            let b = take_whitespace(b)?;
+
+            // TODO: add checks for duplicate key values?
+            let k = key_name.as_bytes();
+            if k.eq_ignore_ascii_case(b"$basetexture") {
+                vmt.base_texture = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"%keywords") {
+                vmt.keywords = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"$detail") {
+                vmt.detail.texture = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"$detailscale") {
+                vmt.detail.scale = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detailblendmode") {
                 let val: u8 = val.parse()?;
                 let val =
                     DetailBlendMode::try_from(val).map_err(|_| VMTError::InvalidBlendMode(val))?;
                 vmt.detail.blend_mode = Some(val);
-            }
-            "$detailblendfactor" => vmt.detail.blend_factor = Some(val.parse()?),
-            "$surfaceprop" => vmt.surface_prop = Some(Cow::Borrowed(val)),
-            "$decal" => vmt.decal = Some(val.parse()?),
-            "$basetexturetransform" => {
+            } else if k.eq_ignore_ascii_case(b"$detailblendfactor") {
+                vmt.detail.blend_factor = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$surfaceprop") {
+                vmt.surface_prop = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"$decal") {
+                vmt.decal = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$basetexturetransform") {
                 let (_, val) = take_vec2(val.as_bytes())?;
                 vmt.base_texture_transform = Some(val);
-            }
-            "$color" => {
+            } else if k.eq_ignore_ascii_case(b"$color") {
                 let (_, val) = take_vec3(val.as_bytes())?;
                 vmt.color = Some(val);
-            }
-            "$detailtint" => {
+            } else if k.eq_ignore_ascii_case(b"$detailtint") {
                 let (_, val) = take_vec3(val.as_bytes())?;
                 vmt.detail.tint = Some(val);
-            }
-            "$detailframe" => vmt.detail.frame = Some(val.parse()?),
-            "$detailalphamaskbasetexture" => {
-                vmt.detail.alpha_mask_base_texture = Some(val.parse()?)
-            }
-            "$detail2" => vmt.detail2.texture = Some(Cow::Borrowed(val)),
-            "$detailscale2" => vmt.detail2.scale = Some(val.parse()?),
-            "$detailblendfactor2" => vmt.detail2.blend_factor = Some(val.parse()?),
-            "$detailframe2" => vmt.detail2.frame = Some(val.parse()?),
-            "$detailtint2" => {
+            } else if k.eq_ignore_ascii_case(b"$detailframe") {
+                vmt.detail.frame = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detailalphamaskbasetexture") {
+                vmt.detail.alpha_mask_base_texture = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detail2") {
+                vmt.detail2.texture = Some(Cow::Borrowed(val));
+            } else if k.eq_ignore_ascii_case(b"$detailscale2") {
+                vmt.detail2.scale = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detailblendfactor2") {
+                vmt.detail2.blend_factor = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detailframe2") {
+                vmt.detail2.frame = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$detailtint2") {
                 let (_, val) = take_vec3(val.as_bytes())?;
                 vmt.detail2.tint = Some(val);
-            }
-            "$phong" => vmt.phong = Some(val.parse()?),
-            "$phongboost" => vmt.phong_boost = Some(val.parse()?),
-            "$phongexponent" => vmt.phong_exponent = Some(val.parse()?),
-            "$phongfresnelranges" => {
+            } else if k.eq_ignore_ascii_case(b"$phong") {
+                vmt.phong = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$phongboost") {
+                vmt.phong_boost = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$phongexponent") {
+                vmt.phong_exponent = Some(val.parse()?);
+            } else if k.eq_ignore_ascii_case(b"$phongfresnelranges") {
                 let (_, val) = take_vec3(val.as_bytes())?;
                 vmt.phong_fresnel_ranges = Some(val);
-            }
-            "$lightwarptexture" => vmt.lightwarp_texture = Some(Cow::Borrowed(val)),
-            _ => {
+            } else if k.eq_ignore_ascii_case(b"$lightwarptexture") {
+                vmt.lightwarp_texture = Some(Cow::Borrowed(val));
+            } else {
                 vmt.other.insert(Cow::Borrowed(key_name), val);
             }
+
+            b_out = b;
         }
+
+        let b = b_out;
 
         let _b = expect_char(b, b'}')?;
 
@@ -234,7 +253,7 @@ impl<'a> Default for VMT<'a> {
         VMT {
             shader_name: ShaderName::LightmappedGeneric,
             base_texture: None,
-            keywords: Vec::new(),
+            keywords: None,
             detail: VMTDetail::default(),
             detail2: VMTDetail2::default(),
             surface_prop: None,
