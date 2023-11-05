@@ -6,6 +6,7 @@ use bevy::{
         Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     },
 };
+use vmt::{VMTError, VMT};
 
 use crate::map::GameMap;
 
@@ -15,7 +16,13 @@ use crate::map::GameMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LSrc {
+    /// Fomr `hl2/hl2_textures_dir.vpk`
+    HL2Textures,
+    /// From `hl2/hl2_misc_dir.vpk`
+    HL2Misc,
+    /// Main game textures
     TexturesVPK,
+    /// Main misc
     MiscVPK,
     Map,
 }
@@ -23,7 +30,8 @@ pub enum LSrc {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LTexture {
     pub image: Handle<Image>,
-    pub src: LSrc,
+    pub image_src: LSrc,
+    pub vmt_src: LSrc,
 }
 
 /// Textures that have been loaded, by their lowercase name  
@@ -55,9 +63,37 @@ impl LoadedTextures {
             return Some(ltexture.image.clone());
         }
 
-        let Some((image, src)) = load_texture(vpk, map, name) else {
+        let Some((vmt, vmt_src)) = find_vmt(vpk, map, name) else {
             // testing panic
-            panic!("Could not load texture: {name:?}");
+            panic!("Could not load vmt: {name:?}");
+        };
+        println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
+        let vmt = VMT::from_bytes(&vmt).unwrap();
+        let mut tmp = None;
+        // TODO: support resolving more than one level of vmt includes
+        let vmt = vmt
+            .resolve(|name| -> Result<VMT<'_>, VMTError> {
+                let Some((vmt, _vmt_src)) = find_vmt(vpk, map, name) else {
+                    // testing panic
+                    panic!("Could not load vmt: {name:?}");
+                };
+                tmp = Some(vmt);
+                // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
+                let vmt = VMT::from_bytes(tmp.as_ref().unwrap())?;
+                println!("Applying: {vmt:?}");
+                Ok(vmt)
+            })
+            .unwrap();
+
+        let Some(base_texture) = vmt.base_texture else {
+            // testing panic
+            panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
+        };
+        println!("Base texture: {base_texture:?}");
+
+        let Some((image, image_src)) = load_texture(vpk, map, &base_texture) else {
+            // testing panic
+            panic!("Could not load texture: {base_texture:?}");
         };
         let (width, height) = image.dimensions();
         let size = Extent3d {
@@ -88,7 +124,8 @@ impl LoadedTextures {
             name.to_lowercase(),
             LTexture {
                 image: handle.clone(),
-                src,
+                image_src,
+                vmt_src,
             },
         );
 
@@ -98,21 +135,38 @@ impl LoadedTextures {
 
 #[derive(Resource)]
 pub struct VpkState {
+    pub hl2_textures: VpkData,
+    pub hl2_misc: VpkData,
     // TODO: should these even be named? Should we just have a general pool of vpks that we look at?
     pub textures: VpkData,
     pub misc: VpkData,
 }
 impl VpkState {
     pub fn new() -> VpkState {
+        let hl2_textures = VpkData::load("./ex/tf/hl2/hl2_textures_dir.vpk").unwrap();
+        let hl2_misc = VpkData::load("./ex/tf/hl2/hl2_misc_dir.vpk").unwrap();
         let textures = VpkData::load("./ex/tf/tf/tf2_textures_dir.vpk").unwrap();
         let misc = VpkData::load("./ex/tf/tf/tf2_misc_dir.vpk").unwrap();
         // TODO: sound
-        VpkState { textures, misc }
+        VpkState {
+            hl2_textures,
+            hl2_misc,
+            textures,
+            misc,
+        }
     }
 
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
     pub fn find<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+        if let Some(entry) = self.hl2_textures.find(name) {
+            return Some((entry, LSrc::HL2Textures));
+        }
+
+        if let Some(entry) = self.hl2_misc.find(name) {
+            return Some((entry, LSrc::HL2Misc));
+        }
+
         if let Some(entry) = self.textures.find(name) {
             return Some((entry, LSrc::TexturesVPK));
         }
@@ -124,9 +178,43 @@ impl VpkState {
         None
     }
 
-    /// Find a texture entry in the loaded vpks.
+    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+        let name = name.strip_prefix("materials/").unwrap_or(name);
+        let name = name.strip_suffix(".vmt").unwrap_or(name);
+
+        if let Some(entry) = self.hl2_textures.find_vmt(name) {
+            return Some((entry, LSrc::HL2Textures));
+        }
+
+        if let Some(entry) = self.hl2_misc.find_vmt(name) {
+            return Some((entry, LSrc::HL2Misc));
+        }
+
+        if let Some(entry) = self.textures.find_vmt(name) {
+            return Some((entry, LSrc::TexturesVPK));
+        }
+
+        if let Some(entry) = self.misc.find_vmt(name) {
+            return Some((entry, LSrc::MiscVPK));
+        }
+
+        None
+    }
+
+    /// Find a vtf texture entry in the loaded vpks.
     /// This ignores case.
     pub fn find_texture<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+        let name = name.strip_prefix("materials/").unwrap_or(name);
+        let name = name.strip_suffix(".vtf").unwrap_or(name);
+
+        if let Some(entry) = self.hl2_textures.find_texture(name) {
+            return Some((entry, LSrc::HL2Textures));
+        }
+
+        if let Some(entry) = self.hl2_misc.find_texture(name) {
+            return Some((entry, LSrc::HL2Misc));
+        }
+
         if let Some(entry) = self.textures.find_texture(name) {
             return Some((entry, LSrc::TexturesVPK));
         }
@@ -161,13 +249,16 @@ impl VpkData {
         None
     }
 
-    /// Find an entry for a texture, looking in the materials folder
-    /// This ignores case.
-    pub fn find_texture<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
+    pub fn find_with_suffix_prefix<'a>(
+        &'a self,
+        prefix: &str,
+        name: &str,
+        suffix: &str,
+    ) -> Option<&'a vpk::entry::VPKEntry> {
         for (file, entry) in self.data.tree.iter() {
-            if file.starts_with("materials/") && file.ends_with(".vtf") {
-                let file = file.trim_start_matches("materials/");
-                let file = file.trim_end_matches(".vtf");
+            if file.starts_with(prefix) && file.ends_with(suffix) {
+                let file = file.trim_start_matches(prefix);
+                let file = file.trim_end_matches(suffix);
                 if file.eq_ignore_ascii_case(name) {
                     return Some(entry);
                 }
@@ -175,6 +266,16 @@ impl VpkData {
         }
 
         None
+    }
+
+    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
+        self.find_with_suffix_prefix("materials/", name, ".vmt")
+    }
+
+    /// Find an entry for a vtf texture, looking in the materials folder
+    /// This ignores case.
+    pub fn find_texture<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
+        self.find_with_suffix_prefix("materials/", name, ".vtf")
     }
 }
 
@@ -211,6 +312,23 @@ fn find_texture<'a>(
     } else if let Some(map) = map {
         let (tex, src) = map.find_texture(name)?;
         // let tex = vtf::from_bytes(&tex).unwrap();
+        Some((Cow::Owned(tex), src))
+    } else {
+        panic!("Failed to find texture {name:?}");
+    }
+}
+
+fn find_vmt<'a>(
+    vpk: &'a VpkState,
+    map: Option<&'a GameMap>,
+    name: &str,
+) -> Option<(Cow<'a, [u8]>, LSrc)> {
+    // TODO: does map take precedence over vpks?
+    if let Some((tex, src)) = vpk.find_vmt(name) {
+        let tex = tex.get().unwrap();
+        Some((tex, src))
+    } else if let Some(map) = map {
+        let (tex, src) = map.find_vmt(name)?;
         Some((Cow::Owned(tex), src))
     } else {
         panic!("Failed to find texture {name:?}");
