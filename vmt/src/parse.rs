@@ -4,7 +4,7 @@ use crate::{util::to_lowercase_cow, VMTError, VMTSub, VMTSubs};
 
 pub(crate) fn parse_sub<'a>(
     b: &'a [u8],
-    key: &'a str,
+    key: &'a [u8],
     root: &mut VMTSubs<'a>,
 ) -> Result<&'a [u8], VMTError> {
     let b = expect_char(b, b'{')?;
@@ -37,6 +37,7 @@ pub(crate) fn parse_sub<'a>(
         }
 
         let (b, val) = take_text(b)?;
+        let val = std::str::from_utf8(val)?;
 
         let b = take_whitespace(b)?;
 
@@ -82,7 +83,7 @@ pub(crate) fn take_whitespace(bytes: &[u8]) -> Result<&[u8], VMTError> {
 
 /// Parse a single non-whitespaced separated word
 /// or a quoted string
-pub(crate) fn take_text(bytes: &[u8]) -> Result<(&[u8], &str), VMTError> {
+pub(crate) fn take_text<'a>(bytes: &'a [u8]) -> Result<(&'a [u8], &'a [u8]), VMTError> {
     if bytes.starts_with(b"\"") {
         return take_str(bytes);
     }
@@ -94,13 +95,11 @@ pub(crate) fn take_text(bytes: &[u8]) -> Result<(&[u8], &str), VMTError> {
 
     let (name, bytes) = bytes.split_at(end);
 
-    let name = std::str::from_utf8(name)?;
-
     Ok((bytes, name))
 }
 
 /// Parse a string like `"LightmappedGeneric"`
-pub(crate) fn take_str(bytes: &[u8]) -> Result<(&[u8], &str), VMTError> {
+pub(crate) fn take_str(bytes: &[u8]) -> Result<(&[u8], &[u8]), VMTError> {
     if !bytes.starts_with(b"\"") {
         return Err(VMTError::NoStringStart);
     }
@@ -114,8 +113,6 @@ pub(crate) fn take_str(bytes: &[u8]) -> Result<(&[u8], &str), VMTError> {
 
     let (name, bytes) = bytes.split_at(end);
 
-    let name = std::str::from_utf8(name)?;
-
     Ok((&bytes[1..], name))
 }
 
@@ -128,8 +125,8 @@ pub(crate) fn take_vec2(bytes: &[u8]) -> Result<(&[u8], [f32; 2]), VMTError> {
     let b = take_whitespace(b)?;
     let b = expect_char(b, b']')?;
 
-    let x = x.parse()?;
-    let y = y.parse()?;
+    let x = std::str::from_utf8(x)?.parse()?;
+    let y = std::str::from_utf8(y)?.parse()?;
 
     Ok((b, [x, y]))
 }
@@ -146,9 +143,9 @@ pub(crate) fn take_vec3(bytes: &[u8]) -> Result<(&[u8], [f32; 3]), VMTError> {
     let b = take_whitespace(b)?;
     let b = expect_char(b, b']')?;
 
-    let x = x.parse()?;
-    let y = y.parse()?;
-    let z = z.parse()?;
+    let x = std::str::from_utf8(x)?.parse()?;
+    let y = std::str::from_utf8(y)?.parse()?;
+    let z = std::str::from_utf8(z)?.parse()?;
 
     Ok((b, [x, y, z]))
 }
@@ -164,16 +161,16 @@ mod test {
         let bytes = b"\"LightmappedGeneric\"";
         let (bytes, name) = take_str(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
 
         let bytes = b"\"LightmappedGeneric\" \"VertexLitGeneric\"";
         let (bytes, name) = take_str(bytes).unwrap();
         assert_eq!(bytes, b" \"VertexLitGeneric\"");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
         let bytes = &bytes[1..];
         let (bytes, name) = take_str(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "VertexLitGeneric");
+        assert_eq!(name, b"VertexLitGeneric");
     }
 
     #[test]
@@ -181,29 +178,29 @@ mod test {
         let bytes = b"LightmappedGeneric";
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
 
         let bytes = b"LightmappedGeneric VertexLitGeneric";
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b" VertexLitGeneric");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
         let bytes = &bytes[1..];
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "VertexLitGeneric");
+        assert_eq!(name, b"VertexLitGeneric");
 
         let bytes = b"\"LightmappedGeneric\"";
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
 
         let bytes = b"\"LightmappedGeneric\" \"VertexLitGeneric\"";
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b" \"VertexLitGeneric\"");
-        assert_eq!(name, "LightmappedGeneric");
+        assert_eq!(name, b"LightmappedGeneric");
         let bytes = &bytes[1..];
         let (bytes, name) = take_text(bytes).unwrap();
         assert_eq!(bytes, b"");
-        assert_eq!(name, "VertexLitGeneric");
+        assert_eq!(name, b"VertexLitGeneric");
     }
 }
