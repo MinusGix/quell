@@ -12,13 +12,6 @@ pub(crate) fn apply<T: Clone>(a: Option<T>, b: &Option<T>) -> Option<T> {
 // converting to lowercase, and then just have accessors that check for equality to lowercase
 // That would be less efficient than normal hashmap access, but it would avoid the allocation
 // and the hashmaps are usually quite small?
-pub(crate) fn to_lowercase_cow_str(text: &str) -> Cow<'_, str> {
-    if text.chars().any(|c| c.is_ascii_uppercase()) {
-        Cow::Owned(text.to_ascii_lowercase())
-    } else {
-        Cow::Borrowed(text)
-    }
-}
 
 pub(crate) fn to_lowercase_cow(text: &[u8]) -> Cow<'_, [u8]> {
     if text.iter().any(|c| c.is_ascii_uppercase()) {

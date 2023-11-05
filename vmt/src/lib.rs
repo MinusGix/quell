@@ -216,7 +216,7 @@ pub struct VMT<'a> {
     pub include: Option<Cow<'a, str>>,
 
     // TODO: is this some sort of enum?
-    pub other: HashMap<Cow<'a, [u8]>, &'a str>,
+    pub other: VMTOther<'a>,
     pub sub: VMTSubs<'a>,
 }
 impl<'a> VMT<'a> {
@@ -244,7 +244,9 @@ impl<'a> VMT<'a> {
             include: apply(self.include, &o.include),
             other: {
                 let mut other = self.other;
-                other.extend(o.other.iter().map(|(k, v)| (k.clone(), *v)));
+                other
+                    .0
+                    .extend(o.other.0.iter().map(|(k, v)| (k.clone(), v.clone())));
                 other
             },
             sub: self.sub.apply(&o.sub),
@@ -399,7 +401,7 @@ impl<'a> VMT<'a> {
                         // Convert key name to lowercase, but only allocate a string if we *have* to
                         let key_name = to_lowercase_cow(k);
 
-                        vmt.other.insert(key_name, val);
+                        vmt.other.0.insert(key_name, Cow::Borrowed(val));
                     }
                 }
                 VMTItem::KeySub(sub_name) => {
@@ -451,7 +453,7 @@ impl<'a> Default for VMT<'a> {
             phong_fresnel_ranges: None,
             lightwarp_texture: None,
             include: None,
-            other: HashMap::new(),
+            other: VMTOther::default(),
             sub: VMTSubs::default(),
         }
     }
@@ -505,6 +507,14 @@ impl<'a> VMTSub<'a> {
             VMTSub::Val(_) => None,
             VMTSub::Sub(v) => Some(v),
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct VMTOther<'a>(pub HashMap<Cow<'a, [u8]>, Cow<'a, str>>);
+impl<'a> VMTOther<'a> {
+    pub fn get(&self, key: impl AsRef<[u8]>) -> Option<&str> {
+        self.0.get(key.as_ref()).map(|v| v.as_ref())
     }
 }
 
@@ -716,8 +726,8 @@ mod test {
         assert_eq!(vmt.shader_name, ShaderName::LightmappedGeneric);
         assert_eq!(vmt.base_texture, Some("Thing/thingy001".into()));
         assert_eq!(vmt.keywords, Some("test".into()));
-        assert_eq!(vmt.other.get(b"$envmap" as &[u8]), Some(&"env_cubemap"));
-        assert_eq!(vmt.other.get(b"$basealphaenvmapmask" as &[u8]), Some(&"1"));
+        assert_eq!(vmt.other.get(b"$envmap" as &[u8]), Some("env_cubemap"));
+        assert_eq!(vmt.other.get(b"$basealphaenvmapmask" as &[u8]), Some("1"));
         assert_eq!(vmt.surface_prop, Some("metal".into()));
 
         // Simple + Comments
@@ -735,7 +745,7 @@ mod test {
         assert_eq!(vmt.shader_name, ShaderName::LightmappedGeneric);
         assert_eq!(vmt.base_texture, Some("Thing/thingy001".into()));
         assert_eq!(vmt.keywords, Some("test".into()));
-        assert_eq!(vmt.other.get(b"$basealphaenvmapmask" as &[u8]), Some(&"1"));
+        assert_eq!(vmt.other.get(b"$basealphaenvmapmask" as &[u8]), Some("1"));
         assert_eq!(vmt.surface_prop, Some("metal".into()));
     }
 
