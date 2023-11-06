@@ -66,6 +66,24 @@ impl From<std::num::ParseIntError> for VMTError {
         VMTError::IntParse(e)
     }
 }
+impl std::error::Error for VMTError {}
+impl std::fmt::Display for VMTError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VMTError::MissingShaderName => write!(f, "Missing shader name"),
+            VMTError::NoStringStart => write!(f, "No string start"),
+            VMTError::NoStringEnd => write!(f, "No string end"),
+            VMTError::Expected(c) => write!(f, "Expected '{}'", c),
+            VMTError::UnexpectedEof => write!(f, "Unexpected EOF"),
+            VMTError::InvalidBlendMode(u) => write!(f, "Invalid blend mode: {}", u),
+            VMTError::Utf8Parse(e) => write!(f, "Utf8 parse error: {}", e),
+            VMTError::FloatParse(e) => write!(f, "Float parse error: {}", e),
+            VMTError::IntParse(e) => write!(f, "Int parse error: {}", e),
+            VMTError::BoolParse(e) => write!(f, "Bool parse error: {}", e),
+            VMTError::Other(_e) => write!(f, "Other error"),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub enum ShaderName<'a> {

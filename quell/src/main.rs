@@ -1,7 +1,11 @@
 mod data;
 pub mod map;
 
-use std::path::Path;
+use std::{
+    collections::HashSet,
+    path::Path,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+};
 
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
@@ -15,8 +19,8 @@ use bevy::{
         },
         settings::{WgpuFeatures, WgpuSettings},
     },
-    utils::HashMap,
 };
+use dashmap::DashSet;
 use data::{LoadedTextures, VpkData, VpkState};
 use image::DynamicImage;
 use map::GameMap;
@@ -27,7 +31,7 @@ use smooth_bevy_cameras::{
 };
 use vbsp::{Bsp, DisplacementInfo};
 
-use crate::data::GameId;
+use crate::data::{construct_image, construct_material_info, GameId, LImage, LMaterial};
 
 fn main() {
     let game_id = GameId::Tf2;
@@ -134,6 +138,8 @@ fn setup(
         // let map_path = "ex/tf/tf/maps/test.bsp";
         let map = GameMap::from_path(map_path).unwrap();
 
+        load_materials(&mut vpk, &mut loaded_textures, &mut images, &map).unwrap();
+
         // load_textures(&mut vpk, &mut loaded_textures, &mut images, &map);
         // {
         //     let mut out_file = std::fs::File::create("map_out.txt").unwrap();
@@ -217,16 +223,11 @@ fn setup(
     }
 }
 
-// /// Load all the (materials -> textures) as images in parallel
-fn load_textures(
-    vpk: &mut VpkState,
-    loaded_textures: &mut LoadedTextures,
-    images: &mut Assets<Image>,
-    map: &GameMap,
-) {
-    // TODO(minor): Avoid allocating all of these strings?
-    // TODO(minor): HashSet or Vec and then dedup?
-    let mut texture_names = Vec::new();
+fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
+    let start_time = std::time::Instant::now();
+
+    // Ex: ctf_2fort has 227 unique materials referenced (directly)
+    let mut material_names = HashSet::with_capacity(372);
     for model in map.bsp.models() {
         for face in model.faces() {
             let texture_info = face.texture();
@@ -237,35 +238,131 @@ fn load_textures(
                 continue;
             }
 
-            let texture_name = texture_info.name();
-            if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
+            let material_name = texture_info.name();
+            if material_name.eq_ignore_ascii_case("tools/toolstrigger") {
                 continue;
             }
 
-            if let Some(disp) = face.displacement() {
+            if let Some(_disp) = face.displacement() {
                 // TODO: displacements have textures too!
                 continue;
             }
 
-            texture_names.push(texture_name.to_string());
+            // material_names.insert(Arc::from(material_name));
+            if material_names.contains(material_name) {
+                continue;
+            } else {
+                // TODO: these should probably be lowercased!
+                material_names.insert(Arc::from(material_name));
+            }
         }
     }
 
-    texture_names.dedup();
+    let end_time = std::time::Instant::now();
+    println!(
+        "Loaded #{} material names in {:?}",
+        material_names.len(),
+        end_time - start_time
+    );
+
+    material_names
+}
+
+/// Load all the (materials -> textures) as images in parallel
+fn load_materials(
+    vpk: &mut VpkState,
+    loaded_textures: &mut LoadedTextures,
+    images: &mut Assets<Image>,
+    map: &GameMap,
+) -> eyre::Result<()> {
+    let material_names = material_names(map);
 
     let start_time = std::time::Instant::now();
 
-    texture_names.into_par_iter().for_each(move |texture_name| {
-        // loaded_textures
-        //     .load_texture(vpk, Some(map), images, &texture_name)
-        //     .unwrap();
-        // let image = Image::default();
-        // images.add(image);
-    });
+    let vpk2 = &*vpk;
+
+    let duplicate_counts = AtomicUsize::new(0);
+
+    // The loaded/loading textures
+    let l: DashSet<Arc<str>> = DashSet::with_capacity(material_names.len());
+    // Iterate over all the materials, loading them.
+    // Typically, none of the materials will error at all so the size is usually the same as
+    // `material_names`
+    let iter = material_names
+        .into_par_iter()
+        .filter_map(move |material_name| {
+            match construct_material_info(vpk2, Some(map), &material_name) {
+                Ok(info) => Some((material_name, info)),
+                Err(err) => {
+                    eprintln!(
+                        "Failed to construct material info for {}: {:?}",
+                        material_name, err
+                    );
+                    None
+                }
+            }
+        })
+        // Check if we need to be the instance loading the texture
+        .map(|(material_name, info)| {
+            if l.contains(&info.base_texture_name) {
+                duplicate_counts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return (material_name, info, false);
+            }
+
+            l.insert(info.base_texture_name.clone());
+
+            (material_name, info, true)
+        })
+        .filter_map(|(material_name, info, should_load_img)| {
+            if !should_load_img {
+                return Some((material_name, info, None));
+            }
+
+            let res = construct_image(vpk2, Some(map), &info.base_texture_name);
+            match res {
+                Ok((image, img_src)) => Some((material_name, info, Some((image, img_src)))),
+                Err(err) => {
+                    eprintln!(
+                        "Failed to construct image for material {}, texture {}: {:?}",
+                        material_name, info.base_texture_name, err
+                    );
+                    None
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    for (material_name, info, image) in iter {
+        if let Some((image, img_src)) = image {
+            loaded_textures.insert_texture_of(
+                images,
+                info.base_texture_name.clone(),
+                image,
+                img_src,
+            )?;
+        }
+
+        // TODO: should we just alloc them as `Arc<str>` before?
+
+        let material = LMaterial {
+            image: Ok(info.base_texture_name),
+            vmt_src: info.vmt_src,
+        };
+
+        loaded_textures.insert_material(material_name, material);
+    }
 
     let end_time = std::time::Instant::now();
 
     println!("Loaded textures in {:?}", end_time - start_time);
+    println!(
+        "Duplicates: {}",
+        duplicate_counts.load(std::sync::atomic::Ordering::SeqCst)
+    );
+
+    loaded_textures.frozen = true;
+
+    Ok(())
 }
 
 const SCALE: f32 = 0.1;

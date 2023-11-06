@@ -37,9 +37,11 @@ pub type TextureName = Arc<str>;
 pub enum MaterialError {
     FindFailure(String),
 
+    Frozen,
+
     VMT(vmt::VMTError),
     Texture(TextureError),
-    Io(Rc<std::io::Error>),
+    Io(Arc<std::io::Error>),
 }
 
 impl From<TextureError> for MaterialError {
@@ -49,7 +51,19 @@ impl From<TextureError> for MaterialError {
 }
 impl From<std::io::Error> for MaterialError {
     fn from(err: std::io::Error) -> Self {
-        MaterialError::Io(Rc::new(err))
+        MaterialError::Io(Arc::new(err))
+    }
+}
+impl std::error::Error for MaterialError {}
+impl std::fmt::Display for MaterialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaterialError::FindFailure(name) => write!(f, "Failed to find material: {}", name),
+            MaterialError::Frozen => write!(f, "Cannot load more materials"),
+            MaterialError::VMT(err) => write!(f, "VMT error: {}", err),
+            MaterialError::Texture(err) => write!(f, "Texture error: {}", err),
+            MaterialError::Io(err) => write!(f, "IO error: {}", err),
+        }
     }
 }
 
@@ -57,6 +71,7 @@ impl From<std::io::Error> for MaterialError {
 pub enum TextureError {
     NotLoaded,
     FindFailure(String),
+    Frozen,
 
     VPK(Arc<vpk::Error>),
     VTF(Arc<vtf::Error>),
@@ -75,6 +90,19 @@ impl From<vtf::Error> for TextureError {
 impl From<std::io::Error> for TextureError {
     fn from(err: std::io::Error) -> Self {
         TextureError::Io(Arc::new(err))
+    }
+}
+impl std::error::Error for TextureError {}
+impl std::fmt::Display for TextureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextureError::NotLoaded => write!(f, "Texture not loaded"),
+            TextureError::FindFailure(name) => write!(f, "Failed to find texture: {}", name),
+            TextureError::Frozen => write!(f, "Cannot load more textures"),
+            TextureError::VPK(err) => write!(f, "VPK error: {}", err),
+            TextureError::VTF(err) => write!(f, "VTF error: {}", err),
+            TextureError::Io(err) => write!(f, "IO error: {}", err),
+        }
     }
 }
 
@@ -97,6 +125,8 @@ pub struct LImage {
 pub struct LoadedTextures {
     pub vmt: HashMap<MaterialName, LMaterial>,
     pub vtf: HashMap<TextureName, LImage>,
+    /// Whether it should refuse to load any more materials/textures
+    pub frozen: bool,
 }
 impl LoadedTextures {
     /// Find a material by its lowercase name
@@ -133,7 +163,7 @@ impl LoadedTextures {
 
     // TODO: could we somehow make this an asset loader?
     /// Load a VMT file, and load the texture it points to
-    pub fn load_material(
+    pub fn load_material<'a>(
         &mut self,
         vpk: &VpkState,
         map: Option<&GameMap>,
@@ -152,73 +182,163 @@ impl LoadedTextures {
             }
         }
 
-        let (vmt, vmt_src) = find_vmt(vpk, map, name).unwrap();
-        // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
-        let vmt = VMT::from_bytes(&vmt).map_err(MaterialError::VMT)?;
-        let mut tmp = None;
-        // TODO: support resolving more than one level of vmt includes
-        let vmt = vmt
-            .resolve(|name| -> Result<VMT<'_>, MaterialError> {
-                let (vmt, _vmt_src) = find_vmt(vpk, map, name)?;
-                tmp = Some(vmt);
-                let vmt = VMT::from_bytes(tmp.as_ref().unwrap()).map_err(MaterialError::VMT)?;
-                Ok(vmt)
-            })
-            .map_err(|x| x.flip(MaterialError::VMT))?;
+        if self.frozen {
+            println!("Frozen for {name:?}");
+            return Err(MaterialError::Frozen);
+        }
+
+        let info = construct_material_info(vpk, map, name)?;
+        let name: MaterialName = name.to_lowercase().into();
+
+        self.load_material_with_info(vpk, map, images, name, info)
+    }
+
+    fn load_material_with_info(
+        &mut self,
+        vpk: &VpkState,
+        map: Option<&GameMap>,
+        images: &mut Assets<Image>,
+        name: MaterialName,
+        info: LoadingMaterialInfo,
+    ) -> Result<Handle<Image>, MaterialError> {
+        if self.frozen {
+            return Err(MaterialError::Frozen);
+        }
 
         let lmaterial = LMaterial {
             image: Err(TextureError::NotLoaded),
-            vmt_src,
+            vmt_src: info.vmt_src,
         };
-        let name: Arc<str> = name.to_lowercase().into();
+
         self.vmt.insert(name.clone(), lmaterial);
 
         // TODO: fallback materials?
         // TODO: normal maps
         // TODO: bump maps
-        let base_texture_name = match &vmt.shader_name {
-            vmt::ShaderName::Water => {
-                // TODO: water has things like refract texture and the normal map
-                if let Some(base_texture) = &vmt.base_texture {
-                    base_texture.as_ref()
-                } else if let Some(tool_texture) = vmt.other.get(b"%tooltexture") {
-                    tool_texture
-                } else {
-                    panic!("Could not find water texture in vmt: {name:?}; vmt: {vmt:#?}");
-                }
-            }
-            _ => {
-                let Some(base_texture) = &vmt.base_texture else {
-                    panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
-                };
-                base_texture.as_ref()
-            }
-        };
 
-        let texture_name = self.load_texture(vpk, map, images, base_texture_name)?;
+        self.load_texture(vpk, map, images, info.base_texture_name.clone())?;
 
-        let handle = self.vtf.get(&texture_name).unwrap().image.clone();
-        self.vmt.get_mut(&name).unwrap().image = Ok(texture_name.clone());
+        let handle = self.vtf.get(&info.base_texture_name).unwrap().image.clone();
+        self.vmt.get_mut(&name).unwrap().image = Ok(info.base_texture_name.clone());
 
         Ok(handle)
     }
 
-    fn load_texture(
+    /// Typically this should not be used.
+    pub fn insert_material(&mut self, name: Arc<str>, material: LMaterial) {
+        self.vmt.insert(name, material);
+    }
+
+    /// Note: you should typically not directly use this, you should probably be loading the
+    /// material that references this texture.
+    pub fn load_texture(
         &mut self,
         vpk: &VpkState,
         map: Option<&GameMap>,
         images: &mut Assets<Image>,
-        name: &str,
-    ) -> Result<TextureName, TextureError> {
-        let (image, image_src) = load_texture(vpk, map, &name)?;
+        name: TextureName,
+    ) -> Result<(), TextureError> {
+        if self.frozen {
+            return Err(TextureError::Frozen);
+        }
 
-        let (width, height) = image.dimensions();
-        let size = Extent3d {
-            width: width as u32,
-            height: height as u32,
-            ..Default::default()
-        };
-        let image = Image {
+        let (image, image_src) = construct_image(vpk, map, &name)?;
+
+        self.insert_texture_of(images, name, image, image_src)?;
+
+        Ok(())
+    }
+
+    pub fn insert_texture_of(
+        &mut self,
+        images: &mut Assets<Image>,
+        name: TextureName,
+        image: Image,
+        image_src: LSrc,
+    ) -> Result<TextureName, TextureError> {
+        if self.frozen {
+            return Err(TextureError::Frozen);
+        }
+
+        let handle = images.add(image);
+
+        self.vtf.insert(
+            name.clone(),
+            LImage {
+                image: handle.clone(),
+                src: image_src,
+            },
+        );
+
+        Ok(name)
+    }
+}
+
+pub struct LoadingMaterialInfo {
+    pub vmt_src: LSrc,
+    pub base_texture_name: Arc<str>,
+}
+
+pub fn construct_material_info(
+    vpk: &VpkState,
+    map: Option<&GameMap>,
+    name: &str,
+) -> Result<LoadingMaterialInfo, MaterialError> {
+    let (vmt, vmt_src) = find_vmt(vpk, map, name).unwrap();
+    // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
+    let vmt = VMT::from_bytes(&vmt).map_err(MaterialError::VMT)?;
+    let mut tmp = None;
+    // TODO: support resolving more than one level of vmt includes
+    let vmt = vmt
+        .resolve(|name| -> Result<VMT<'_>, MaterialError> {
+            let (vmt, _vmt_src) = find_vmt(vpk, map, name)?;
+            tmp = Some(vmt);
+            let vmt = VMT::from_bytes(tmp.as_ref().unwrap()).map_err(MaterialError::VMT)?;
+            Ok(vmt)
+        })
+        .map_err(|x| x.flip(MaterialError::VMT))?;
+
+    let base_texture_name = match &vmt.shader_name {
+        vmt::ShaderName::Water => {
+            // TODO: water has things like refract texture and the normal map
+            if let Some(base_texture) = vmt.base_texture {
+                Arc::from(base_texture.to_lowercase())
+            } else if let Some(tool_texture) = vmt.other.get(b"%tooltexture") {
+                Arc::from(tool_texture)
+            } else {
+                panic!("Could not find water texture in vmt: {name:?}; vmt: {vmt:#?}");
+            }
+        }
+        _ => {
+            let Some(base_texture) = vmt.base_texture else {
+                panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
+            };
+            Arc::from(base_texture.to_lowercase())
+        }
+    };
+
+    Ok(LoadingMaterialInfo {
+        vmt_src,
+        base_texture_name,
+    })
+}
+
+pub fn construct_image(
+    vpk: &VpkState,
+    map: Option<&GameMap>,
+    name: &str,
+) -> Result<(Image, LSrc), TextureError> {
+    let (image, image_src) = load_texture(vpk, map, &name)?;
+
+    let (width, height) = image.dimensions();
+    let size = Extent3d {
+        width: width as u32,
+        height: height as u32,
+        ..Default::default()
+    };
+
+    Ok((
+        Image {
             data: image.into_raw(),
             texture_descriptor: TextureDescriptor {
                 label: None,
@@ -240,23 +360,9 @@ impl LoadedTextures {
                 ..Default::default()
             }),
             ..Default::default()
-        };
-
-        let handle = images.add(image);
-
-        let name = name.to_lowercase();
-        let name: Arc<str> = Arc::from(name);
-
-        self.vtf.insert(
-            name.clone(),
-            LImage {
-                image: handle.clone(),
-                src: image_src,
-            },
-        );
-
-        Ok(name)
-    }
+        },
+        image_src,
+    ))
 }
 
 pub enum GameId {

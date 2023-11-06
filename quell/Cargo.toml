@@ -24,3 +24,4 @@ vpk = { path = "../../vpk-rs" }
 vtf = { path = "../../vtf-rs/" }
 vmt = { path = "../vmt/" }
 rayon = "1.8.0"
+dashmap = "5.5.3"
