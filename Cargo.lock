@@ -2986,6 +2986,7 @@ dependencies = [
  "bevy",
  "eyre",
  "image",
+ "rayon",
  "smooth-bevy-cameras",
  "vbsp",
  "vmt",

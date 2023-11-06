@@ -2,8 +2,11 @@ use std::{borrow::Cow, collections::HashMap, path::Path};
 
 use bevy::{
     prelude::{Assets, Handle, Image, Resource},
-    render::render_resource::{
-        Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+    render::{
+        render_resource::{
+            Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+        },
+        texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     },
 };
 use vmt::{VMTError, VMT};
@@ -132,6 +135,13 @@ impl LoadedTextures {
                     | TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
+            sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
+                // TODO: we might have to decide this based on usage?
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..Default::default()
+            }),
             ..Default::default()
         };
 

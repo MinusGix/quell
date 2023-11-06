@@ -22,7 +22,7 @@ use image::DynamicImage;
 use map::GameMap;
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
-    LookTransformPlugin,
+    LookTransform, LookTransformPlugin,
 };
 use vbsp::{Bsp, DisplacementInfo};
 
@@ -94,9 +94,14 @@ fn setup(
     commands
         .spawn(Camera3dBundle::default())
         .insert(UnrealCameraBundle::new(
-            UnrealCameraController::default(),
-            Vec3::new(-2.0, 5.0, 5.0),
-            Vec3::new(0., 0., 0.),
+            UnrealCameraController {
+                keyboard_mvmt_sensitivity: 40.0,
+                ..Default::default()
+            },
+            Vec3::new(-10.0, 5.0, 5.0),
+            // Vec3::new(0., 0., 0.),
+            // opposite direction
+            Vec3::new(-35., 15., -10.),
             Vec3::Y,
         ));
 
@@ -123,14 +128,11 @@ fn setup(
     // });
 
     {
-        // let data = std::fs::read("ex/ctf_2fort.bsp").unwrap();
-        // let bsp = Bsp::read(&data).unwrap();
-        // map = Some(GameMap::from_path("ex/ctf_2fort.bsp").unwrap());
+        // let map_path = "ex/ctf_2fort.bsp";
+        let map_path = "ex/tf/tf/maps/test.bsp";
+        let map = GameMap::from_path(map_path).unwrap();
 
-        // commands.insert_resource(GameMap::from_path("ex/ctf_2fort.bsp").unwrap());
-        // let map = map.as_ref().unwrap();
-        let map = GameMap::from_path("ex/ctf_2fort.bsp").unwrap();
-
+        // load_textures(&mut vpk, &mut loaded_textures, &mut images, &map);
         // {
         //     let mut out_file = std::fs::File::create("map_out.txt").unwrap();
         //     let zip = map.bsp.pack.zip.lock().unwrap();
@@ -208,8 +210,50 @@ fn setup(
     }
 }
 
+// /// Load all the (materials -> textures) as images in parallel
+// fn load_textures(
+//     vpk: &mut VpkState,
+//     loaded_textures: &mut LoadedTextures,
+//     images: &mut Assets<Image>,
+//     map: &GameMap,
+// ) {
+//     // TODO(minor): Avoid allocating all of these strings?
+//     // TODO(minor): HashSet or Vec and then dedup?
+//     let mut texture_names = Vec::new();
+//     for model in map.bsp.models() {
+//         for face in model.faces() {
+//             let texture_info = face.texture();
+
+//             if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
+//                 continue;
+//             } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
+//                 continue;
+//             }
+
+//             let texture_name = texture_info.name();
+//             if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
+//                 continue;
+//             }
+
+//             if let Some(disp) = face.displacement() {
+//                 // TODO: displacements have textures too!
+//                 continue;
+//             }
+
+//             texture_names.push(texture_name.to_string());
+//         }
+//     }
+
+//     texture_names.dedup();
+
+//     rayon::scope
+// }
+
 const SCALE: f32 = 0.1;
 
+// TODO: we don't create the map mesh with a transform yet it is positioned fine, so probably the
+// triangles are being positioned 'manually'. I think we should maybe try getting them to center on
+// 0,0,0 and then apply a transform to make it work nicer with other transform stuff
 fn create_basic_map_mesh<'a>(
     bsp: &'a Bsp,
     face: vbsp::Handle<'a, vbsp::Face>,
@@ -226,6 +270,7 @@ fn create_basic_map_mesh<'a>(
         let plane = bsp.planes.get(face.plane_num as usize).unwrap();
         plane.normal.into()
     };
+    let normal = rotate(normal);
 
     // TODO(minor): preallocate
     let mut face_triangles = Vec::new();
@@ -250,7 +295,6 @@ fn create_basic_map_mesh<'a>(
         let vertex = [vertex[0] * SCALE, vertex[1] * SCALE, vertex[2] * SCALE];
         let vertex = rotate(vertex);
 
-        // face_triangles.push(vertex);
         triangle[triangle_vert] = vertex;
         triangle_vert += 1;
 
@@ -278,10 +322,11 @@ fn create_basic_map_mesh<'a>(
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, face_triangles);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, face_normals);
-    // println!("UVs: {face_uvs:?}");
     // panic!();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, face_uvs);
     // TODO: lightmaps with UV_1?
+
+    println!("Normal: {normal:?}");
 
     // Create the material
     let material = StandardMaterial {
@@ -318,17 +363,27 @@ fn calc_uv(
     let scale = texture_info.texture_scale;
     let transform = texture_info.texture_transform;
 
+    // Swaps to Y-up from Z-up
+    // or maybe its Y-down from Z-up? one of the bevy cheatbooks say textures are y down
     // let vertex = [vertex[0], vertex[2], -vertex[1]];
+    // but also we shouldn't need to be doing that swapping of axes, the vert we get passed
+    // already gets rotated to y-up?!
+    let vertex = [vertex[0], -vertex[1], vertex[2]];
+    let scale = tex_coord_4(rotate_4(scale));
+    let transform = tex_coord_4(rotate_4(transform));
 
-    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] + scale[3];
-    let v = transform[0] * vertex[0]
-        + transform[1] * vertex[1]
-        + transform[2] * vertex[2]
-        + transform[3];
+    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] - scale[3];
+    let v = transform[0] * vertex[0] + transform[1] * vertex[1] + transform[2] * vertex[2]
+        - transform[3];
 
-    let u = u / tex_width;
-    let v = v / tex_height;
+    // We have to multiply by scale since we already scaled the very down so really this is just undoing that
+    let scaled_width = tex_width * SCALE;
+    let scaled_height = tex_height * SCALE;
 
+    let u = u / scaled_width;
+    let v = v / scaled_height;
+
+    println!("scale: {scale:?} transform: {transform:?} -> [{u}, {v}]");
     [u, v]
 }
 
@@ -546,6 +601,17 @@ fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 fn rotate(v: [f32; 3]) -> [f32; 3] {
     [v[0], v[2], v[1]]
 }
+/// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
+fn rotate_4(v: [f32; 4]) -> [f32; 4] {
+    [v[0], v[2], v[1], v[3]]
+}
 fn scale(v: [f32; 3]) -> [f32; 3] {
     [v[0] * SCALE, v[1] * SCALE, v[2] * SCALE]
+}
+/// Convert a y-up (bevy) vector to a tex coordinate vector
+fn tex_coord(v: [f32; 3]) -> [f32; 3] {
+    [v[0], -v[1], v[2]]
+}
+fn tex_coord_4(v: [f32; 4]) -> [f32; 4] {
+    [v[0], -v[1], v[2], v[3]]
 }
