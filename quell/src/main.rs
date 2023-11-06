@@ -128,8 +128,8 @@ fn setup(
     // });
 
     {
-        // let map_path = "ex/ctf_2fort.bsp";
-        let map_path = "ex/tf/tf/maps/test.bsp";
+        let map_path = "ex/ctf_2fort.bsp";
+        // let map_path = "ex/tf/tf/maps/test.bsp";
         let map = GameMap::from_path(map_path).unwrap();
 
         // load_textures(&mut vpk, &mut loaded_textures, &mut images, &map);
@@ -270,7 +270,8 @@ fn create_basic_map_mesh<'a>(
         let plane = bsp.planes.get(face.plane_num as usize).unwrap();
         plane.normal.into()
     };
-    let normal = rotate(normal);
+    // let normal = [-normal[0], -normal[2], -normal[1]];
+    // TODO: do we need to rotate the normal?
 
     // TODO(minor): preallocate
     let mut face_triangles = Vec::new();
@@ -299,7 +300,9 @@ fn create_basic_map_mesh<'a>(
         triangle_vert += 1;
 
         if triangle_vert > 2 {
-            let vert = triangle[0];
+            // TODO: I swapped the order of these because my rotate also made the z neg
+            // and that seems to fix things, but I don't completely understand the details
+            let vert = triangle[2];
             face_triangles.push(vert);
             face_normals.push(normal);
             face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
@@ -309,7 +312,7 @@ fn create_basic_map_mesh<'a>(
             face_normals.push(normal);
             face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
 
-            let vert = triangle[2];
+            let vert = triangle[0];
             face_triangles.push(vert);
             face_normals.push(normal);
             face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
@@ -489,40 +492,18 @@ fn create_displacement_mesh<'a>(
 
     let mut tris = Vec::new();
     let mut normals = Vec::new();
-    // let texture_name = face.texture().name();
 
     for y in 0..(verts_wide - 1) {
         for x in 0..(verts_wide - 1) {
             let i = x + y * verts_wide;
 
-            let v1 = scale(rotate(base_verts[i as usize]));
-            let v2 = scale(rotate(base_verts[(i + 1) as usize]));
-            let v3 = scale(rotate(base_verts[(i + verts_wide) as usize]));
-            let v4 = scale(rotate(base_verts[(i + verts_wide + 1) as usize]));
-
-            // let color1 = pick_color(texture_name, base_alphas[i as usize]);
-
-            // let tex_r1 = ((color1 >> 16) & 0xFF) as f32 / 255.0;
-            // let tex_g1 = ((color1 >> 8) & 0xFF) as f32 / 255.0;
-            // let tex_b1 = (color1 & 0xFF) as f32 / 255.0;
-
-            // let color2 = pick_color(texture_name, base_alphas[(i + 1) as usize]);
-
-            // let tex_r2 = ((color2 >> 16) & 0xFF) as f32 / 255.0;
-            // let tex_g2 = ((color2 >> 8) & 0xFF) as f32 / 255.0;
-            // let tex_b2 = (color2 & 0xFF) as f32 / 255.0;
-
-            // let color3 = pick_color(texture_name, base_alphas[(i + verts_wide) as usize]);
-
-            // let tex_r3 = ((color3 >> 16) & 0xFF) as f32 / 255.0;
-            // let tex_g3 = ((color3 >> 8) & 0xFF) as f32 / 255.0;
-            // let tex_b3 = (color3 & 0xFF) as f32 / 255.0;
-
-            // let color4 = pick_color(texture_name, base_alphas[(i + verts_wide + 1) as usize]);
-
-            // let tex_r4 = ((color4 >> 16) & 0xFF) as f32 / 255.0;
-            // let tex_g4 = ((color4 >> 8) & 0xFF) as f32 / 255.0;
-            // let tex_b4 = (color4 & 0xFF) as f32 / 255.0;
+            // TODO: Displacement don't work with the other rotate, why?
+            // They look fine with just swapping the z and y, but the normal mesh
+            // looked fine with that until I had to apply the texture.
+            let v1 = scale(rotate_s(base_verts[i as usize]));
+            let v2 = scale(rotate_s(base_verts[(i + 1) as usize]));
+            let v3 = scale(rotate_s(base_verts[(i + verts_wide) as usize]));
+            let v4 = scale(rotate_s(base_verts[(i + verts_wide + 1) as usize]));
 
             if i % 2 != 0 {
                 let normal = find_normal(v1, v3, v2);
@@ -598,11 +579,14 @@ fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 
 /// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
 fn rotate(v: [f32; 3]) -> [f32; 3] {
+    [v[0], v[2], -v[1]]
+}
+fn rotate_s(v: [f32; 3]) -> [f32; 3] {
     [v[0], v[2], v[1]]
 }
 /// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
 fn rotate_4(v: [f32; 4]) -> [f32; 4] {
-    [v[0], v[2], v[1], v[3]]
+    [v[0], v[2], -v[1], v[3]]
 }
 fn scale(v: [f32; 3]) -> [f32; 3] {
     [v[0] * SCALE, v[1] * SCALE, v[2] * SCALE]
