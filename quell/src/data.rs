@@ -156,6 +156,18 @@ impl LoadedTextures {
         None
     }
 
+    pub fn find_material_texture(&self, name: &str) -> Option<Result<Handle<Image>, TextureError>> {
+        let lmaterial = self.find_material(name)?;
+
+        match &lmaterial.image {
+            Ok(name) => {
+                let ltexture = self.vtf.get(name).unwrap();
+                Some(Ok(ltexture.image.clone()))
+            }
+            Err(err) => Some(Err(err.clone())),
+        }
+    }
+
     // TODO: we could save on memory by removing textures that have already been loaded
     // (in a non-context specific texture area, like the main vpks)
     // though that would require a bit of a different storage.
@@ -175,16 +187,8 @@ impl LoadedTextures {
         images: &mut Assets<Image>,
         name: &str,
     ) -> Result<Handle<Image>, MaterialError> {
-        if let Some(lmaterial) = self.find_material(name) {
-            match &lmaterial.image {
-                Ok(name) => {
-                    // TODO: should we really unwrap? It might be possible that we have a vmt in main vpks
-                    // which then has a texture in the map itself, which could get unloaded?
-                    let ltexture = self.vtf.get(name).unwrap();
-                    return Ok(ltexture.image.clone());
-                }
-                Err(err) => return Err(err.clone().into()),
-            }
+        if let Some(image) = self.find_material_texture(name) {
+            return Ok(image?);
         }
 
         if self.frozen {

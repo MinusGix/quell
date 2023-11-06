@@ -24,7 +24,7 @@ use dashmap::DashSet;
 use data::{LoadedTextures, VpkData, VpkState};
 use image::DynamicImage;
 use map::GameMap;
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
     LookTransform, LookTransformPlugin,
@@ -36,10 +36,16 @@ use crate::data::{
 };
 
 fn main() {
+    // TODO: we should probably load vpks in setup so we can have a loading screen nicely
+    let start_time = std::time::Instant::now();
+
     let game_id = GameId::Tf2;
     let root_path = "./ex/tf/";
     let vpk = VpkState::new(root_path, game_id).expect("Failed to load VPKs for the game");
     let loaded_textures = LoadedTextures::default();
+
+    let end_time = std::time::Instant::now();
+    println!("Loaded VPKs in {:?}", end_time - start_time);
 
     // use std::io::Write;
     // let root = &vpk.misc.data.tree;
@@ -58,7 +64,6 @@ fn main() {
         // })
         .insert_resource(vpk)
         .insert_resource(loaded_textures)
-        // .insert_resource(None::<GameMap>)
         .add_plugins(DefaultPlugins)
         // .add_plugins(WireframePlugin)
         .add_plugins(LookTransformPlugin)
@@ -142,81 +147,54 @@ fn setup(
 
         load_materials(&mut vpk, &mut loaded_textures, &mut images, &map).unwrap();
 
-        // load_textures(&mut vpk, &mut loaded_textures, &mut images, &map);
-        // {
-        //     let mut out_file = std::fs::File::create("map_out.txt").unwrap();
-        //     let zip = map.bsp.pack.zip.lock().unwrap();
-        //     use std::io::Write;
-        //     for name in zip.file_names() {
-        //         writeln!(out_file, "{}", name).unwrap();
-        //     }
-        // };
-
         let start_time = std::time::Instant::now();
 
-        for model in map.bsp.models() {
-            for face in model.faces() {
-                let texture_info = face.texture();
-                let texture_data = texture_info.texture_data();
+        // TODO: would it be better to do a Task based system likes the async_compute example?
 
-                if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
-                    continue;
-                } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-                    continue;
-                }
+        // TODO: We might be able to do something wacky and maybe more efficient by reserving
+        // handles before hand.
 
-                let texture_name = texture_info.name();
+        println!("Model count: #{}", map.bsp.models.len());
 
-                let reflect = texture_data.reflectivity;
-                let color = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-                    Color::rgb(0.0, 0.0, 0.0)
-                } else {
-                    if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
-                        continue;
+        let cmds = map
+            .bsp
+            .models
+            .par_iter()
+            .flat_map(|m| {
+                let start = m.first_face as usize;
+                let end = start + m.face_count as usize;
+
+                map.bsp.faces[start..end].par_iter()
+            })
+            .filter_map(|face| {
+                let face = vbsp::Handle::new(&map.bsp, face);
+                let res = construct_face_cmd(&loaded_textures, &map, face).transpose()?;
+                match res {
+                    Ok(face_info) => Some(face_info),
+                    Err(err) => {
+                        eprintln!("Failed to construct face: {:?}", err);
+                        None
                     }
-
-                    let alpha = if texture_info.flags.contains(vbsp::TextureFlags::TRANS) {
-                        0.2
-                    } else {
-                        1.0
-                    };
-
-                    // TODO: actually just get this texture
-                    if texture_name == "water/water_2fort_beneath.vmt" {
-                        Color::rgba(0.0, 0.0, 0.8, 0.4)
-                    } else {
-                        // Color::rgba(reflect.x.sqrt(), reflect.y.sqrt(), reflect.z.sqrt(), alpha)
-                        Color::rgba(reflect.x, reflect.y, reflect.z, alpha)
-                        // Color::RED
-                    }
-                };
-
-                if let Some(disp) = face.displacement() {
-                    let (mesh, material) = create_displacement_mesh(&map.bsp, face, disp, color);
-
-                    commands.spawn(PbrBundle {
-                        mesh: meshes.add(mesh),
-                        material: materials.add(material),
-                        ..Default::default()
-                    });
-                } else {
-                    let texture_name = texture_info.name();
-                    // let texture = vpk.load_texture(&mut images, texture_name);
-                    let texture = loaded_textures
-                        .load_material(&mut vpk, Some(&map), &mut images, texture_name)
-                        .unwrap();
-
-                    let (mesh, material) =
-                        create_basic_map_mesh(&map.bsp, face, color, Some(texture));
-
-                    commands.spawn(PbrBundle {
-                        mesh: meshes.add(mesh),
-                        material: materials.add(material),
-                        ..Default::default()
-                    });
                 }
-            }
-        }
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(move |face_info| {
+                let mesh = meshes.add(face_info.mesh);
+                let material = materials.add(face_info.material);
+
+                Some(PbrBundle {
+                    mesh,
+                    material,
+                    ..Default::default()
+                })
+            })
+            // We have to collect a second time because spawn_batch requires a 'static
+            // iterator
+            .collect::<Vec<_>>();
+
+        commands.spawn_batch(cmds);
+
         let end_time = std::time::Instant::now();
 
         println!("Loaded map in {:?}", end_time - start_time);
@@ -230,8 +208,12 @@ fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
 
     // Ex: ctf_2fort has 227 unique materials referenced (directly)
     let mut material_names = HashSet::with_capacity(372);
+    let mut face_count = 0;
+    let mut prob_vis_face_count = 0;
     for model in map.bsp.models() {
         for face in model.faces() {
+            face_count += 1;
+
             let texture_info = face.texture();
 
             if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
@@ -250,6 +232,8 @@ fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
                 continue;
             }
 
+            prob_vis_face_count += 1;
+
             // material_names.insert(Arc::from(material_name));
             if material_names.contains(material_name) {
                 continue;
@@ -262,7 +246,7 @@ fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
 
     let end_time = std::time::Instant::now();
     println!(
-        "Loaded #{} material names in {:?}",
+        "Loaded #{} material names in {:?}\n\tFace count: {prob_vis_face_count} / {face_count}",
         material_names.len(),
         end_time - start_time
     );
@@ -344,8 +328,6 @@ fn load_materials(
             )?;
         }
 
-        // TODO: should we just alloc them as `Arc<str>` before?
-
         let material = LMaterial {
             image: Ok(info.base_texture_name),
             vmt_src: info.vmt_src,
@@ -368,6 +350,69 @@ fn load_materials(
 }
 
 const SCALE: f32 = 0.1;
+
+struct FaceInfo {
+    mesh: Mesh,
+    material: StandardMaterial,
+}
+
+fn construct_face_cmd(
+    loaded_textures: &LoadedTextures,
+    map: &GameMap,
+    face: vbsp::Handle<'_, vbsp::Face>,
+) -> eyre::Result<Option<FaceInfo>> {
+    let texture_info = face.texture();
+    let texture_data = texture_info.texture_data();
+
+    if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
+        // TODO: create nodraw meshes but hide them so we can render them in debug mode
+        return Ok(None);
+    } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
+        // TODO: create the skybox
+        return Ok(None);
+    }
+
+    let texture_name = texture_info.name();
+
+    // TODO: this probably ignores other pieces that we shouldn't render
+    if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
+        return Ok(None);
+    }
+
+    let reflect = texture_data.reflectivity;
+    let color = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
+        Color::rgb(0.0, 0.0, 0.0)
+    } else {
+        let alpha = if texture_info.flags.contains(vbsp::TextureFlags::TRANS) {
+            0.2
+        } else {
+            1.0
+        };
+
+        // TODO: actually just get this texture
+        if texture_name == "water/water_2fort_beneath.vmt" {
+            Color::rgba(0.0, 0.0, 0.8, 0.4)
+        } else {
+            Color::rgba(reflect.x, reflect.y, reflect.z, alpha)
+        }
+    };
+
+    if let Some(disp) = face.displacement() {
+        let (mesh, material) = create_displacement_mesh(&map.bsp, face, disp, color);
+
+        Ok(Some(FaceInfo { mesh, material }))
+    } else {
+        let texture_name = texture_info.name();
+        let texture = loaded_textures
+            .find_material_texture(texture_name)
+            .unwrap()
+            .unwrap();
+
+        let (mesh, material) = create_basic_map_mesh(&map.bsp, face, color, Some(texture));
+
+        Ok(Some(FaceInfo { mesh, material }))
+    }
+}
 
 // TODO: we don't create the map mesh with a transform yet it is positioned fine, so probably the
 // triangles are being positioned 'manually'. I think we should maybe try getting them to center on
