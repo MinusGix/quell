@@ -326,8 +326,6 @@ fn create_basic_map_mesh<'a>(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, face_uvs);
     // TODO: lightmaps with UV_1?
 
-    println!("Normal: {normal:?}");
-
     // Create the material
     let material = StandardMaterial {
         // base_color: color,
@@ -354,36 +352,37 @@ fn create_basic_map_mesh<'a>(
     (mesh, material)
 }
 
+/// Calculate the UV coordinates for the given vertex and texture.
 fn calc_uv(
     texture_info: &vbsp::TextureInfo,
     vertex: [f32; 3],
     tex_width: f32,
     tex_height: f32,
 ) -> [f32; 2] {
+    // [xmul, ymul, zmul, offset]
     let scale = texture_info.texture_scale;
     let transform = texture_info.texture_transform;
 
-    // Swaps to Y-up from Z-up
-    // or maybe its Y-down from Z-up? one of the bevy cheatbooks say textures are y down
-    // let vertex = [vertex[0], vertex[2], -vertex[1]];
-    // but also we shouldn't need to be doing that swapping of axes, the vert we get passed
-    // already gets rotated to y-up?!
-    let vertex = [vertex[0], -vertex[1], vertex[2]];
+    // Undo the scaling
+    let vertex = [vertex[0] / SCALE, vertex[1] / SCALE, vertex[2] / SCALE];
+    // Convert to texture coordinates (y-down)
+    let vertex = tex_coord(vertex);
+
+    // Convert from z-up to y-up, and then to texture coordinates
     let scale = tex_coord_4(rotate_4(scale));
     let transform = tex_coord_4(rotate_4(transform));
 
-    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] - scale[3];
-    let v = transform[0] * vertex[0] + transform[1] * vertex[1] + transform[2] * vertex[2]
-        - transform[3];
+    // xmul * x + ymul * y + zmul * z + offset
+    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] + scale[3];
+    let v = transform[0] * vertex[0]
+        + transform[1] * vertex[1]
+        + transform[2] * vertex[2]
+        + transform[3];
 
-    // We have to multiply by scale since we already scaled the very down so really this is just undoing that
-    let scaled_width = tex_width * SCALE;
-    let scaled_height = tex_height * SCALE;
+    // Normalize by the texture size
+    let u = u / tex_width;
+    let v = v / tex_height;
 
-    let u = u / scaled_width;
-    let v = v / scaled_height;
-
-    println!("scale: {scale:?} transform: {transform:?} -> [{u}, {v}]");
     [u, v]
 }
 
