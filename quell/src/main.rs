@@ -203,11 +203,14 @@ fn setup(
     }
 }
 
-fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
+/// Get all of the names of the materials (vmts) that are referenced in the map.  
+/// These names are deduplicated.
+fn material_names(map: &GameMap) -> Vec<Arc<str>> {
     let start_time = std::time::Instant::now();
 
     // Ex: ctf_2fort has 227 unique materials referenced (directly)
-    let mut material_names = HashSet::with_capacity(372);
+    let mut material_names = Vec::with_capacity(200);
+    let mut texture_name_indices = HashSet::with_capacity(300);
     let mut face_count = 0;
     let mut prob_vis_face_count = 0;
     for model in map.bsp.models() {
@@ -234,13 +237,14 @@ fn material_names(map: &GameMap) -> HashSet<Arc<str>> {
 
             prob_vis_face_count += 1;
 
-            // material_names.insert(Arc::from(material_name));
-            if material_names.contains(material_name) {
+            let texture_name_index = texture_info.texture_data().name_string_table_id;
+
+            if !texture_name_indices.insert(texture_name_index) {
                 continue;
-            } else {
-                // TODO: these should probably be lowercased!
-                material_names.insert(Arc::from(material_name));
             }
+
+            // TODO: should we to_lowercase them?
+            material_names.push(Arc::from(material_name));
         }
     }
 
