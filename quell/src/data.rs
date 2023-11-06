@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, path::Path};
+use std::{borrow::Cow, collections::HashMap, path::Path, rc::Rc, sync::Arc};
 
 use bevy::{
     prelude::{Assets, Handle, Image, Resource},
@@ -30,22 +30,90 @@ pub enum LSrc {
     Map,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LTexture {
-    pub image: Handle<Image>,
-    pub image_src: LSrc,
+pub type MaterialName = Arc<str>;
+pub type TextureName = Arc<str>;
+
+#[derive(Debug, Clone)]
+pub enum MaterialError {
+    FindFailure(String),
+
+    VMT(vmt::VMTError),
+    Texture(TextureError),
+    Io(Rc<std::io::Error>),
+}
+
+impl From<TextureError> for MaterialError {
+    fn from(err: TextureError) -> Self {
+        MaterialError::Texture(err)
+    }
+}
+impl From<std::io::Error> for MaterialError {
+    fn from(err: std::io::Error) -> Self {
+        MaterialError::Io(Rc::new(err))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TextureError {
+    NotLoaded,
+    FindFailure(String),
+
+    VPK(Arc<vpk::Error>),
+    VTF(Arc<vtf::Error>),
+    Io(Arc<std::io::Error>),
+}
+impl From<vpk::Error> for TextureError {
+    fn from(err: vpk::Error) -> Self {
+        TextureError::VPK(Arc::new(err))
+    }
+}
+impl From<vtf::Error> for TextureError {
+    fn from(err: vtf::Error) -> Self {
+        TextureError::VTF(Arc::new(err))
+    }
+}
+impl From<std::io::Error> for TextureError {
+    fn from(err: std::io::Error) -> Self {
+        TextureError::Io(Arc::new(err))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LMaterial {
+    /// Name of vtf
+    pub image: Result<TextureName, TextureError>,
     pub vmt_src: LSrc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LImage {
+    pub image: Handle<Image>,
+    pub src: LSrc,
 }
 
 /// Textures that have been loaded, by their lowercase name  
 /// These are (typically? always?) from the `materials/` folder
 #[derive(Default, Clone, Resource)]
-pub struct LoadedTextures(HashMap<String, LTexture>);
+pub struct LoadedTextures {
+    pub vmt: HashMap<MaterialName, LMaterial>,
+    pub vtf: HashMap<TextureName, LImage>,
+}
 impl LoadedTextures {
+    /// Find a material by its lowercase name
+    pub fn find_material(&self, name: &str) -> Option<&LMaterial> {
+        for (vmt_name, material) in self.vmt.iter() {
+            if name.eq_ignore_ascii_case(&vmt_name) {
+                return Some(material);
+            }
+        }
+
+        None
+    }
+
     /// Find a texture by its lowercase name
-    pub fn find(&self, name: &str) -> Option<&LTexture> {
-        for (image_name, image) in self.0.iter() {
-            if name.eq_ignore_ascii_case(&image_name) {
+    pub fn find_texture(&self, name: &str) -> Option<&LImage> {
+        for (vtf_name, image) in self.vtf.iter() {
+            if name.eq_ignore_ascii_case(&vtf_name) {
                 return Some(image);
             }
         }
@@ -53,44 +121,62 @@ impl LoadedTextures {
         None
     }
 
+    // TODO: we could save on memory by removing textures that have already been loaded
+    // (in a non-context specific texture area, like the main vpks)
+    // though that would require a bit of a different storage.
+    // We currently store it by the VMT name, rather than the VTF name
+    //
+    // but naively adding a separate hashmap doing vtf name -> image
+    // would have issues in the future, when the VTF might choose things that change how we store
+    // the image.
+    // Though this could be maybe avoided by some sort of hash, though that isn't unique enough?
+
     // TODO: could we somehow make this an asset loader?
     /// Load a VMT file, and load the texture it points to
-    pub fn load_texture(
+    pub fn load_material(
         &mut self,
         vpk: &VpkState,
         map: Option<&GameMap>,
         images: &mut Assets<Image>,
         name: &str,
-    ) -> Option<Handle<Image>> {
-        if let Some(ltexture) = self.find(name) {
-            return Some(ltexture.image.clone());
+    ) -> Result<Handle<Image>, MaterialError> {
+        if let Some(lmaterial) = self.find_material(name) {
+            match &lmaterial.image {
+                Ok(name) => {
+                    // TODO: should we really unwrap? It might be possible that we have a vmt in main vpks
+                    // which then has a texture in the map itself, which could get unloaded?
+                    let ltexture = self.vtf.get(name).unwrap();
+                    return Ok(ltexture.image.clone());
+                }
+                Err(err) => return Err(err.clone().into()),
+            }
         }
 
-        let Some((vmt, vmt_src)) = find_vmt(vpk, map, name) else {
-            // testing panic
-            panic!("Could not load vmt: {name:?}");
-        };
+        let (vmt, vmt_src) = find_vmt(vpk, map, name).unwrap();
         // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
-        let vmt = VMT::from_bytes(&vmt).unwrap();
+        let vmt = VMT::from_bytes(&vmt).map_err(MaterialError::VMT)?;
         let mut tmp = None;
         // TODO: support resolving more than one level of vmt includes
         let vmt = vmt
-            .resolve(|name| -> Result<VMT<'_>, VMTError> {
-                let Some((vmt, _vmt_src)) = find_vmt(vpk, map, name) else {
-                    // testing panic
-                    panic!("Could not load vmt: {name:?}");
-                };
-                // println!("Applying: {}", std::str::from_utf8(&vmt).unwrap());
+            .resolve(|name| -> Result<VMT<'_>, MaterialError> {
+                let (vmt, _vmt_src) = find_vmt(vpk, map, name)?;
                 tmp = Some(vmt);
-                let vmt = VMT::from_bytes(tmp.as_ref().unwrap())?;
+                let vmt = VMT::from_bytes(tmp.as_ref().unwrap()).map_err(MaterialError::VMT)?;
                 Ok(vmt)
             })
-            .unwrap();
+            .map_err(|x| x.flip(MaterialError::VMT))?;
+
+        let lmaterial = LMaterial {
+            image: Err(TextureError::NotLoaded),
+            vmt_src,
+        };
+        let name: Arc<str> = name.to_lowercase().into();
+        self.vmt.insert(name.clone(), lmaterial);
 
         // TODO: fallback materials?
         // TODO: normal maps
         // TODO: bump maps
-        let base_texture = match &vmt.shader_name {
+        let base_texture_name = match &vmt.shader_name {
             vmt::ShaderName::Water => {
                 // TODO: water has things like refract texture and the normal map
                 if let Some(base_texture) = &vmt.base_texture {
@@ -109,12 +195,23 @@ impl LoadedTextures {
             }
         };
 
-        // println!("Base texture: {base_texture:?}");
+        let texture_name = self.load_texture(vpk, map, images, base_texture_name)?;
 
-        let Some((image, image_src)) = load_texture(vpk, map, &base_texture) else {
-            // testing panic
-            panic!("Could not load texture: {base_texture:?}");
-        };
+        let handle = self.vtf.get(&texture_name).unwrap().image.clone();
+        self.vmt.get_mut(&name).unwrap().image = Ok(texture_name.clone());
+
+        Ok(handle)
+    }
+
+    fn load_texture(
+        &mut self,
+        vpk: &VpkState,
+        map: Option<&GameMap>,
+        images: &mut Assets<Image>,
+        name: &str,
+    ) -> Result<TextureName, TextureError> {
+        let (image, image_src) = load_texture(vpk, map, &name)?;
+
         let (width, height) = image.dimensions();
         let size = Extent3d {
             width: width as u32,
@@ -147,16 +244,18 @@ impl LoadedTextures {
 
         let handle = images.add(image);
 
-        self.0.insert(
-            name.to_lowercase(),
-            LTexture {
+        let name = name.to_lowercase();
+        let name: Arc<str> = Arc::from(name);
+
+        self.vtf.insert(
+            name.clone(),
+            LImage {
                 image: handle.clone(),
-                image_src,
-                vmt_src,
+                src: image_src,
             },
         );
 
-        Some(handle)
+        Ok(name)
     }
 }
 
@@ -349,27 +448,27 @@ fn load_texture(
     vpk: &VpkState,
     map: Option<&GameMap>,
     name: &str,
-) -> Option<(image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, LSrc)> {
+) -> Result<(image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, LSrc), TextureError> {
     let (tex, src) = find_texture(vpk, map, name)?;
-    let tex = vtf::from_bytes(&tex).unwrap();
-    let image = tex.highres_image.decode(0).unwrap();
-    Some((image.into_rgba8(), src))
+    let tex = vtf::from_bytes(&tex)?;
+    let image = tex.highres_image.decode(0)?;
+    Ok((image.into_rgba8(), src))
 }
 
 fn find_texture<'a>(
     vpk: &'a VpkState,
     map: Option<&'a GameMap>,
     name: &str,
-) -> Option<(Cow<'a, [u8]>, LSrc)> {
+) -> Result<(Cow<'a, [u8]>, LSrc), TextureError> {
     // TODO: does map take precedence over vpks?
     if let Some((tex, src)) = vpk.find_texture(name) {
-        let tex = tex.get().unwrap();
-        // let tex = vtf::from_bytes(&tex).unwrap();
-        Some((tex, src))
+        let tex = tex.get()?;
+        Ok((tex, src))
     } else if let Some(map) = map {
-        let (tex, src) = map.find_texture(name)?;
-        // let tex = vtf::from_bytes(&tex).unwrap();
-        Some((Cow::Owned(tex), src))
+        let (tex, src) = map
+            .find_texture(name)
+            .ok_or_else(|| TextureError::FindFailure(name.to_string()))?;
+        Ok((Cow::Owned(tex), src))
     } else {
         panic!("Failed to find texture {name:?}");
     }
@@ -379,15 +478,17 @@ fn find_vmt<'a>(
     vpk: &'a VpkState,
     map: Option<&'a GameMap>,
     name: &str,
-) -> Option<(Cow<'a, [u8]>, LSrc)> {
+) -> Result<(Cow<'a, [u8]>, LSrc), MaterialError> {
     // TODO: does map take precedence over vpks?
     if let Some((tex, src)) = vpk.find_vmt(name) {
-        let tex = tex.get().unwrap();
-        Some((tex, src))
+        let tex = tex.get()?;
+        Ok((tex, src))
     } else if let Some(map) = map {
-        let (tex, src) = map.find_vmt(name)?;
-        Some((Cow::Owned(tex), src))
+        let (tex, src) = map
+            .find_vmt(name)
+            .ok_or_else(|| MaterialError::FindFailure(name.to_string()))?;
+        Ok((Cow::Owned(tex), src))
     } else {
-        panic!("Failed to find texture {name:?}");
+        Err(MaterialError::FindFailure(name.to_string()))
     }
 }

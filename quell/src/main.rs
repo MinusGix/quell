@@ -20,6 +20,7 @@ use bevy::{
 use data::{LoadedTextures, VpkData, VpkState};
 use image::DynamicImage;
 use map::GameMap;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
     LookTransform, LookTransformPlugin,
@@ -73,6 +74,7 @@ fn setup(
     mut loaded_textures: ResMut<LoadedTextures>,
     // mut map: Option<ResMut<GameMap>>,
 ) {
+    println!("Setup");
     // ambient_light.color = Color::WHITE;
     // ambient_light.brightness = 0.05;
 
@@ -142,6 +144,8 @@ fn setup(
         //     }
         // };
 
+        let start_time = std::time::Instant::now();
+
         for model in map.bsp.models() {
             for face in model.faces() {
                 let texture_info = face.texture();
@@ -191,7 +195,7 @@ fn setup(
                     let texture_name = texture_info.name();
                     // let texture = vpk.load_texture(&mut images, texture_name);
                     let texture = loaded_textures
-                        .load_texture(&mut vpk, Some(&map), &mut images, texture_name)
+                        .load_material(&mut vpk, Some(&map), &mut images, texture_name)
                         .unwrap();
 
                     let (mesh, material) =
@@ -205,49 +209,64 @@ fn setup(
                 }
             }
         }
+        let end_time = std::time::Instant::now();
+
+        println!("Loaded map in {:?}", end_time - start_time);
 
         commands.insert_resource(map);
     }
 }
 
 // /// Load all the (materials -> textures) as images in parallel
-// fn load_textures(
-//     vpk: &mut VpkState,
-//     loaded_textures: &mut LoadedTextures,
-//     images: &mut Assets<Image>,
-//     map: &GameMap,
-// ) {
-//     // TODO(minor): Avoid allocating all of these strings?
-//     // TODO(minor): HashSet or Vec and then dedup?
-//     let mut texture_names = Vec::new();
-//     for model in map.bsp.models() {
-//         for face in model.faces() {
-//             let texture_info = face.texture();
+fn load_textures(
+    vpk: &mut VpkState,
+    loaded_textures: &mut LoadedTextures,
+    images: &mut Assets<Image>,
+    map: &GameMap,
+) {
+    // TODO(minor): Avoid allocating all of these strings?
+    // TODO(minor): HashSet or Vec and then dedup?
+    let mut texture_names = Vec::new();
+    for model in map.bsp.models() {
+        for face in model.faces() {
+            let texture_info = face.texture();
 
-//             if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
-//                 continue;
-//             } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-//                 continue;
-//             }
+            if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
+                continue;
+            } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
+                continue;
+            }
 
-//             let texture_name = texture_info.name();
-//             if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
-//                 continue;
-//             }
+            let texture_name = texture_info.name();
+            if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
+                continue;
+            }
 
-//             if let Some(disp) = face.displacement() {
-//                 // TODO: displacements have textures too!
-//                 continue;
-//             }
+            if let Some(disp) = face.displacement() {
+                // TODO: displacements have textures too!
+                continue;
+            }
 
-//             texture_names.push(texture_name.to_string());
-//         }
-//     }
+            texture_names.push(texture_name.to_string());
+        }
+    }
 
-//     texture_names.dedup();
+    texture_names.dedup();
 
-//     rayon::scope
-// }
+    let start_time = std::time::Instant::now();
+
+    texture_names.into_par_iter().for_each(move |texture_name| {
+        // loaded_textures
+        //     .load_texture(vpk, Some(map), images, &texture_name)
+        //     .unwrap();
+        // let image = Image::default();
+        // images.add(image);
+    });
+
+    let end_time = std::time::Instant::now();
+
+    println!("Loaded textures in {:?}", end_time - start_time);
+}
 
 const SCALE: f32 = 0.1;
 

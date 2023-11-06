@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::HashMap};
 use util::{apply, StopOnErr};
 
 use crate::{
-    parse::{expect_char, take_text, take_vec2, take_vec3, take_whitespace},
+    parse::{expect_char, take_text, take_vec3, take_whitespace},
     util::to_lowercase_cow,
 };
 
@@ -28,6 +28,23 @@ pub enum VMTError<E = ()> {
     BoolParse(std::str::ParseBoolError),
 
     Other(E),
+}
+impl<E> VMTError<E> {
+    pub fn flip(self, f: impl Fn(VMTError) -> E) -> E {
+        match self {
+            VMTError::MissingShaderName => f(VMTError::MissingShaderName),
+            VMTError::NoStringStart => f(VMTError::NoStringStart),
+            VMTError::NoStringEnd => f(VMTError::NoStringEnd),
+            VMTError::Expected(c) => f(VMTError::Expected(c)),
+            VMTError::UnexpectedEof => f(VMTError::UnexpectedEof),
+            VMTError::InvalidBlendMode(u) => f(VMTError::InvalidBlendMode(u)),
+            VMTError::Utf8Parse(e) => f(VMTError::Utf8Parse(e)),
+            VMTError::FloatParse(e) => f(VMTError::FloatParse(e)),
+            VMTError::IntParse(e) => f(VMTError::IntParse(e)),
+            VMTError::BoolParse(e) => f(VMTError::BoolParse(e)),
+            VMTError::Other(e) => e,
+        }
+    }
 }
 impl From<std::str::Utf8Error> for VMTError {
     fn from(e: std::str::Utf8Error) -> VMTError {
