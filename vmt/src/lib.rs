@@ -638,6 +638,77 @@ pub enum VMTItem<'a> {
     EndSub,
     Comment(&'a [u8]),
 }
+impl<'a> VMTItem<'a> {
+    pub fn as_shader_name(&self) -> Option<&ShaderName<'a>> {
+        match self {
+            VMTItem::ShaderName(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_key_value(&self) -> Option<(&[u8], &[u8])> {
+        match self {
+            VMTItem::KeyValue(k, v) => Some((k, v)),
+            _ => None,
+        }
+    }
+
+    pub fn as_key_sub(&self) -> Option<&[u8]> {
+        match self {
+            VMTItem::KeySub(k) => Some(k),
+            _ => None,
+        }
+    }
+
+    pub fn as_comment(&self) -> Option<&[u8]> {
+        match self {
+            VMTItem::Comment(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_end_sub(&self) -> Option<()> {
+        match self {
+            VMTItem::EndSub => Some(()),
+            _ => None,
+        }
+    }
+
+    pub fn into_shader_name(self) -> Option<ShaderName<'a>> {
+        match self {
+            VMTItem::ShaderName(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn into_key_value(self) -> Option<(&'a [u8], &'a [u8])> {
+        match self {
+            VMTItem::KeyValue(k, v) => Some((k, v)),
+            _ => None,
+        }
+    }
+
+    pub fn into_key_sub(self) -> Option<&'a [u8]> {
+        match self {
+            VMTItem::KeySub(k) => Some(k),
+            _ => None,
+        }
+    }
+
+    pub fn into_comment(self) -> Option<&'a [u8]> {
+        match self {
+            VMTItem::Comment(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn into_end_sub(self) -> Option<()> {
+        match self {
+            VMTItem::EndSub => Some(()),
+            _ => None,
+        }
+    }
+}
 impl<'a> std::fmt::Debug for VMTItem<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

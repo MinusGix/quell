@@ -31,7 +31,9 @@ use smooth_bevy_cameras::{
 };
 use vbsp::{Bsp, DisplacementInfo};
 
-use crate::data::{construct_image, construct_material_info, GameId, LImage, LMaterial};
+use crate::data::{
+    construct_image, construct_material_info, construct_material_info2, GameId, LImage, LMaterial,
+};
 
 fn main() {
     let game_id = GameId::Tf2;
@@ -291,7 +293,7 @@ fn load_materials(
     let iter = material_names
         .into_par_iter()
         .filter_map(move |material_name| {
-            match construct_material_info(vpk2, Some(map), &material_name) {
+            match construct_material_info2(vpk2, Some(map), &material_name) {
                 Ok(info) => Some((material_name, info)),
                 Err(err) => {
                     eprintln!(

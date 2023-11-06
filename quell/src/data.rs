@@ -9,7 +9,7 @@ use bevy::{
         texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     },
 };
-use vmt::{VMTError, VMT};
+use vmt::{ShaderName, VMTError, VMTItem, VMT};
 
 use crate::map::GameMap;
 
@@ -52,6 +52,11 @@ impl From<TextureError> for MaterialError {
 impl From<std::io::Error> for MaterialError {
     fn from(err: std::io::Error) -> Self {
         MaterialError::Io(Arc::new(err))
+    }
+}
+impl From<vmt::VMTError> for MaterialError {
+    fn from(err: vmt::VMTError) -> Self {
+        MaterialError::VMT(err)
     }
 }
 impl std::error::Error for MaterialError {}
@@ -284,8 +289,7 @@ pub fn construct_material_info(
     map: Option<&GameMap>,
     name: &str,
 ) -> Result<LoadingMaterialInfo, MaterialError> {
-    let (vmt, vmt_src) = find_vmt(vpk, map, name).unwrap();
-    // println!("VMT: {}", std::str::from_utf8(&vmt).unwrap());
+    let (vmt, vmt_src) = find_vmt(vpk, map, name)?;
     let vmt = VMT::from_bytes(&vmt).map_err(MaterialError::VMT)?;
     let mut tmp = None;
     // TODO: support resolving more than one level of vmt includes
@@ -314,6 +318,138 @@ pub fn construct_material_info(
                 panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
             };
             Arc::from(base_texture.to_lowercase())
+        }
+    };
+
+    Ok(LoadingMaterialInfo {
+        vmt_src,
+        base_texture_name,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct MinimalVMT<'a> {
+    pub shader_name: ShaderName<'a>,
+    pub base_texture: Option<&'a str>,
+    pub include: Option<&'a str>,
+
+    pub tool_texture: Option<&'a str>,
+}
+impl<'a> MinimalVMT<'a> {
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<MinimalVMT<'a>, VMTError> {
+        let mut vmt_iter = vmt::vmt_from_bytes(bytes);
+
+        let mut vmt = MinimalVMT {
+            shader_name: ShaderName::LightmappedGeneric,
+            base_texture: None,
+            include: None,
+            tool_texture: None,
+        };
+
+        vmt.shader_name = vmt_iter
+            .next()
+            .transpose()?
+            .map(VMTItem::into_shader_name)
+            .flatten()
+            .ok_or(VMTError::MissingShaderName)?;
+
+        let mut sub_depth = 0;
+        for item in vmt_iter {
+            let item = item?;
+            match item {
+                VMTItem::ShaderName(_) => unreachable!(),
+                VMTItem::KeyValue(key, value) => {
+                    if sub_depth != 0 {
+                        continue;
+                    }
+
+                    if key.eq_ignore_ascii_case(b"$basetexture") {
+                        vmt.base_texture =
+                            Some(std::str::from_utf8(value).map_err(VMTError::from)?);
+                    } else if key.eq_ignore_ascii_case(b"include") {
+                        vmt.include = Some(std::str::from_utf8(value).map_err(VMTError::from)?);
+                    } else if key.eq_ignore_ascii_case(b"%tooltexture") {
+                        vmt.tool_texture =
+                            Some(std::str::from_utf8(value).map_err(VMTError::from)?);
+                    }
+                }
+                VMTItem::KeySub(_name) => {
+                    sub_depth += 1;
+                }
+                VMTItem::EndSub => {
+                    sub_depth -= 1;
+                }
+                VMTItem::Comment(_) => {}
+            }
+        }
+
+        Ok(vmt)
+    }
+
+    pub fn apply<'b>(self, other: &MinimalVMT<'b>) -> MinimalVMT<'b>
+    where
+        'a: 'b,
+    {
+        let mut vmt = MinimalVMT {
+            shader_name: self.shader_name,
+            base_texture: self.base_texture,
+            include: self.include,
+            tool_texture: self.tool_texture,
+        };
+
+        if let Some(base_texture_name) = other.base_texture {
+            vmt.base_texture = Some(base_texture_name);
+        }
+
+        // vmt.include = other.include;
+
+        if let Some(tool_texture) = other.tool_texture {
+            vmt.tool_texture = Some(tool_texture);
+        }
+
+        vmt
+    }
+}
+
+// TODO: compare the speed of this with construct_material_info
+// this should be faster but it might be dominated by reading the vpk out..
+pub fn construct_material_info2(
+    vpk: &VpkState,
+    map: Option<&GameMap>,
+    name: &str,
+) -> Result<LoadingMaterialInfo, MaterialError> {
+    let (vmt, vmt_src) = find_vmt(vpk, map, name)?;
+
+    let vmt = MinimalVMT::from_bytes(&vmt)?;
+    let mut tmp = None;
+    let vmt = if let Some(include) = vmt.include {
+        let (included_vmt, _) = find_vmt(vpk, map, include)?;
+        tmp = Some(included_vmt);
+        let included_vmt = MinimalVMT::from_bytes(tmp.as_ref().unwrap())?;
+
+        // vmt.apply(&included_vmt)
+        included_vmt.apply(&vmt)
+    } else {
+        vmt
+    };
+
+    let base_texture_name = match &vmt.shader_name {
+        ShaderName::Water => {
+            // TODO: water has things like refract texture and the normal map
+            if let Some(base_texture) = vmt.base_texture {
+                Arc::from(base_texture.to_lowercase())
+            } else if let Some(tool_texture) = vmt.tool_texture {
+                Arc::from(tool_texture.to_lowercase())
+            } else {
+                panic!("Could not find water texture in vmt: {name:?}; vmt: {vmt:#?}");
+            }
+        }
+        _ => {
+            if let Some(base_texture) = vmt.base_texture {
+                Arc::from(base_texture.to_lowercase())
+            } else {
+                panic!("Could not find base texture in vmt: {name:?}; vmt: {vmt:#?}");
+            }
         }
     };
 
