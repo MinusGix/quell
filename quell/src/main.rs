@@ -41,11 +41,9 @@ fn main() {
     println!("Loaded VPKs in {:?}", end_time - start_time);
 
     // use std::io::Write;
-    // let root = &vpk.misc.data.tree;
-    // let mut out_file = std::fs::File::create("out2.txt").unwrap();
-    // for (key, v) in root {
-    //     writeln!(out_file, "{}", key).unwrap();
-    // }
+    // let root = &vpk.textures.data;
+    // let mut out_file = std::fs::File::create("tf2_textures.txt").unwrap();
+    // write!(out_file, "{root:#?}").unwrap();
 
     #[allow(clippy::default_constructed_unit_structs)]
     App::new()
@@ -355,6 +353,12 @@ fn load_materials(
 
         loaded_textures.insert_material(material_name, material);
     }
+
+    println!(
+        "V: vmt #{}; vtf #{}",
+        loaded_textures.vmt.len(),
+        loaded_textures.vtf.len()
+    );
 
     let end_time = std::time::Instant::now();
 

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, path::Path, rc::Rc, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, hash::Hash, path::Path, sync::Arc};
 
 use bevy::{
     prelude::{Assets, Handle, Image, Resource},
@@ -9,7 +9,12 @@ use bevy::{
         texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     },
 };
+use indexmap::Equivalent;
 use vmt::{ShaderName, VMTError, VMTItem, VMT};
+use vpk::{
+    access::{DirFile, DirFileBigRefLowercase},
+    vpk::Ext,
+};
 
 use crate::map::GameMap;
 
@@ -571,20 +576,25 @@ impl VpkState {
 
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
-    pub fn find<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
-        if let Some(entry) = self.hl2_textures.find(name) {
+    pub fn find<'a>(
+        &'a self,
+        ext: &Ext<'_>,
+        dir: &str,
+        filename: &str,
+    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
+        if let Some(entry) = self.hl2_textures.find(ext, dir, filename) {
             return Some((entry, LSrc::HL2Textures));
         }
 
-        if let Some(entry) = self.hl2_misc.find(name) {
+        if let Some(entry) = self.hl2_misc.find(ext, dir, filename) {
             return Some((entry, LSrc::HL2Misc));
         }
 
-        if let Some(entry) = self.textures.find(name) {
+        if let Some(entry) = self.textures.find(ext, dir, filename) {
             return Some((entry, LSrc::TexturesVPK));
         }
 
-        if let Some(entry) = self.misc.find(name) {
+        if let Some(entry) = self.misc.find(ext, dir, filename) {
             return Some((entry, LSrc::MiscVPK));
         }
 
@@ -592,22 +602,26 @@ impl VpkState {
     }
 
     pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
+        // println!("Find VMT {name:?}");
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vmt").unwrap_or(name);
 
-        if let Some(entry) = self.hl2_textures.find_vmt(name) {
+        let re = DirFileBigRefLowercase::new("materials", name);
+        // println!("-> {name:?} -> {re:?}");
+
+        if let Some(entry) = self.hl2_textures.find_vmt_direct(re) {
             return Some((entry, LSrc::HL2Textures));
         }
 
-        if let Some(entry) = self.hl2_misc.find_vmt(name) {
+        if let Some(entry) = self.hl2_misc.find_vmt_direct(re) {
             return Some((entry, LSrc::HL2Misc));
         }
 
-        if let Some(entry) = self.textures.find_vmt(name) {
+        if let Some(entry) = self.textures.find_vmt_direct(re) {
             return Some((entry, LSrc::TexturesVPK));
         }
 
-        if let Some(entry) = self.misc.find_vmt(name) {
+        if let Some(entry) = self.misc.find_vmt_direct(re) {
             return Some((entry, LSrc::MiscVPK));
         }
 
@@ -623,19 +637,21 @@ impl VpkState {
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vtf").unwrap_or(name);
 
-        if let Some(entry) = self.hl2_textures.find_texture(name) {
+        let re = DirFileBigRefLowercase::new("materials", name);
+
+        if let Some(entry) = self.hl2_textures.find_texture_direct(re) {
             return Some((entry, LSrc::HL2Textures));
         }
 
-        if let Some(entry) = self.hl2_misc.find_texture(name) {
+        if let Some(entry) = self.hl2_misc.find_texture_direct(re) {
             return Some((entry, LSrc::HL2Misc));
         }
 
-        if let Some(entry) = self.textures.find_texture(name) {
+        if let Some(entry) = self.textures.find_texture_direct(re) {
             return Some((entry, LSrc::TexturesVPK));
         }
 
-        if let Some(entry) = self.misc.find_texture(name) {
+        if let Some(entry) = self.misc.find_texture_direct(re) {
             return Some((entry, LSrc::MiscVPK));
         }
 
@@ -655,43 +671,37 @@ impl VpkData {
 
     /// Find an entry in the loaded vpk.
     /// This ignores case.
-    pub fn find<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
-        for (file, entry) in self.data.iter_entries() {
-            if file.eq_ignore_ascii_case(name) {
-                return Some(entry);
-            }
-        }
-
-        None
-    }
-
-    pub fn find_with_suffix_prefix<'a>(
+    pub fn find<'a>(
         &'a self,
-        prefix: &str,
-        name: &str,
-        suffix: &str,
+        ext: &Ext<'_>,
+        dir: &str,
+        filename: &str,
     ) -> Option<vpk::entry::VPKEntryHandle<'a>> {
-        for (file, entry) in self.data.iter_entries() {
-            if file.starts_with(prefix) && file.ends_with(suffix) {
-                let file = file.trim_start_matches(prefix);
-                let file = file.trim_end_matches(suffix);
-                if file.eq_ignore_ascii_case(name) {
-                    return Some(entry);
-                }
-            }
-        }
-
-        None
+        self.data.get_ignore_case(ext, dir, filename)
     }
 
-    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
-        self.find_with_suffix_prefix("materials/", name, ".vmt")
+    pub fn find_direct<'a, K: Equivalent<DirFile> + Hash>(
+        &'a self,
+        ext: &Ext<'_>,
+        re: K,
+    ) -> Option<vpk::entry::VPKEntryHandle<'a>> {
+        self.data.get_direct(ext, re)
+    }
+
+    pub fn find_vmt_direct<K: Equivalent<DirFile> + Hash>(
+        &self,
+        re: K,
+    ) -> Option<vpk::entry::VPKEntryHandle<'_>> {
+        self.find_direct(&Ext::Vmt, re)
     }
 
     /// Find an entry for a vtf texture, looking in the materials folder
     /// This ignores case.
-    pub fn find_texture<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
-        self.find_with_suffix_prefix("materials/", name, ".vtf")
+    pub fn find_texture_direct<K: Equivalent<DirFile> + Hash>(
+        &self,
+        re: K,
+    ) -> Option<vpk::entry::VPKEntryHandle<'_>> {
+        self.find_direct(&Ext::Vtf, re)
     }
 }
 

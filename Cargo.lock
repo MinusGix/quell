@@ -3000,6 +3000,7 @@ dependencies = [
  "dashmap",
  "eyre",
  "image",
+ "indexmap 2.1.0",
  "rayon",
  "smooth-bevy-cameras",
  "vbsp",
@@ -3713,6 +3714,7 @@ name = "vpk"
 version = "0.1.4"
 dependencies = [
  "binread",
+ "indexmap 2.1.0",
  "thiserror",
 ]
 
