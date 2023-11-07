@@ -137,7 +137,7 @@ impl LoadedTextures {
     /// Find a material by its lowercase name
     pub fn find_material(&self, name: &str) -> Option<&LMaterial> {
         for (vmt_name, material) in self.vmt.iter() {
-            if name.eq_ignore_ascii_case(&vmt_name) {
+            if name.eq_ignore_ascii_case(vmt_name) {
                 return Some(material);
             }
         }
@@ -148,7 +148,7 @@ impl LoadedTextures {
     /// Find a texture by its lowercase name
     pub fn find_texture(&self, name: &str) -> Option<&LImage> {
         for (vtf_name, image) in self.vtf.iter() {
-            if name.eq_ignore_ascii_case(&vtf_name) {
+            if name.eq_ignore_ascii_case(vtf_name) {
                 return Some(image);
             }
         }
@@ -353,8 +353,7 @@ impl<'a> MinimalVMT<'a> {
         vmt.shader_name = vmt_iter
             .next()
             .transpose()?
-            .map(VMTItem::into_shader_name)
-            .flatten()
+            .and_then(VMTItem::into_shader_name)
             .ok_or(VMTError::MissingShaderName)?;
 
         let mut sub_depth = 0;
@@ -422,10 +421,13 @@ pub fn construct_material_info2(
     map: Option<&GameMap>,
     name: &str,
 ) -> Result<LoadingMaterialInfo, MaterialError> {
+    // let start_time = std::time::Instant::now();
     let (vmt, vmt_src) = find_vmt(vpk, map, name)?;
+    // let end_time = std::time::Instant::now();
+    // println!("Took {:?} to find vmt {name:?}", end_time - start_time);
 
     let vmt = MinimalVMT::from_bytes(&vmt)?;
-    let mut tmp = None;
+    let tmp;
     let vmt = if let Some(include) = vmt.include {
         let (included_vmt, _) = find_vmt(vpk, map, include)?;
         tmp = Some(included_vmt);
@@ -468,12 +470,12 @@ pub fn construct_image(
     map: Option<&GameMap>,
     name: &str,
 ) -> Result<(Image, LSrc), TextureError> {
-    let (image, image_src) = load_texture(vpk, map, &name)?;
+    let (image, image_src) = load_texture(vpk, map, name)?;
 
     let (width, height) = image.dimensions();
     let size = Extent3d {
-        width: width as u32,
-        height: height as u32,
+        width,
+        height,
         ..Default::default()
     };
 
@@ -569,7 +571,7 @@ impl VpkState {
 
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
-    pub fn find<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+    pub fn find<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
         if let Some(entry) = self.hl2_textures.find(name) {
             return Some((entry, LSrc::HL2Textures));
         }
@@ -589,7 +591,7 @@ impl VpkState {
         None
     }
 
-    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vmt").unwrap_or(name);
 
@@ -614,7 +616,10 @@ impl VpkState {
 
     /// Find a vtf texture entry in the loaded vpks.
     /// This ignores case.
-    pub fn find_texture<'a>(&'a self, name: &str) -> Option<(&'a vpk::entry::VPKEntry, LSrc)> {
+    pub fn find_texture<'a>(
+        &'a self,
+        name: &str,
+    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vtf").unwrap_or(name);
 
@@ -650,8 +655,8 @@ impl VpkData {
 
     /// Find an entry in the loaded vpk.
     /// This ignores case.
-    pub fn find<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
-        for (file, entry) in self.data.tree.iter() {
+    pub fn find<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
+        for (file, entry) in self.data.iter_entries() {
             if file.eq_ignore_ascii_case(name) {
                 return Some(entry);
             }
@@ -665,8 +670,8 @@ impl VpkData {
         prefix: &str,
         name: &str,
         suffix: &str,
-    ) -> Option<&'a vpk::entry::VPKEntry> {
-        for (file, entry) in self.data.tree.iter() {
+    ) -> Option<vpk::entry::VPKEntryHandle<'a>> {
+        for (file, entry) in self.data.iter_entries() {
             if file.starts_with(prefix) && file.ends_with(suffix) {
                 let file = file.trim_start_matches(prefix);
                 let file = file.trim_end_matches(suffix);
@@ -679,13 +684,13 @@ impl VpkData {
         None
     }
 
-    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
+    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
         self.find_with_suffix_prefix("materials/", name, ".vmt")
     }
 
     /// Find an entry for a vtf texture, looking in the materials folder
     /// This ignores case.
-    pub fn find_texture<'a>(&'a self, name: &str) -> Option<&'a vpk::entry::VPKEntry> {
+    pub fn find_texture<'a>(&'a self, name: &str) -> Option<vpk::entry::VPKEntryHandle<'a>> {
         self.find_with_suffix_prefix("materials/", name, ".vtf")
     }
 }

@@ -23,7 +23,7 @@ pub(crate) fn take_whitespace(bytes: &[u8]) -> Result<&[u8], VMTError> {
 
 /// Parse a single non-whitespaced separated word
 /// or a quoted string
-pub(crate) fn take_text<'a>(bytes: &'a [u8]) -> Result<(&'a [u8], &'a [u8]), VMTError> {
+pub(crate) fn take_text(bytes: &[u8]) -> Result<(&[u8], &[u8]), VMTError> {
     if bytes.starts_with(b"\"") {
         return take_str(bytes);
     }

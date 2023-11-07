@@ -341,8 +341,10 @@ impl<'a> VMT<'a> {
             return Err(VMTError::MissingShaderName);
         };
 
-        let mut vmt = VMT::default();
-        vmt.shader_name = shader_name;
+        let mut vmt = VMT {
+            shader_name,
+            ..Default::default()
+        };
 
         let mut sub_depth = 0;
         // we can't use the [T; 16] because it isn't Copy
@@ -359,11 +361,10 @@ impl<'a> VMT<'a> {
                         // We're in a sub
                         let mut sub = &mut vmt.sub;
                         // TODO(minor): this does more string allocs than it really needs to
-                        for i in 0..sub_depth {
-                            let sub_name = sub_path[i].clone();
+                        for sub_name in sub_path.iter().take(sub_depth) {
                             let tmp = sub
                                 .0
-                                .entry(sub_name)
+                                .entry(sub_name.clone())
                                 .or_insert_with(|| VMTSub::Sub(VMTSubs::default()));
                             match tmp {
                                 VMTSub::Sub(s) => sub = s,
@@ -446,11 +447,10 @@ impl<'a> VMT<'a> {
                     // This is just to insert the empty sub
                     let mut sub = &mut vmt.sub;
                     // TODO(minor): this does more string allocs than it really needs to
-                    for i in 0..sub_depth {
-                        let sub_name = sub_path[i].clone();
+                    for sub_name in sub_path.iter().take(sub_depth) {
                         let tmp = sub
                             .0
-                            .entry(sub_name)
+                            .entry(sub_name.clone())
                             .or_insert_with(|| VMTSub::Sub(VMTSubs::default()));
                         match tmp {
                             VMTSub::Sub(s) => sub = s,
@@ -785,10 +785,7 @@ pub fn vmt_from_bytes<'a>(
 
         // comment
         if b.starts_with(b"//") {
-            let end = b
-                .iter()
-                .position(|&b| b == b'\n')
-                .unwrap_or_else(|| b.len());
+            let end = b.iter().position(|&b| b == b'\n').unwrap_or(b.len());
             let comment = &b[..end];
             b = &b[end..];
             return Ok(Some(VMTItem::Comment(comment)));
@@ -911,14 +908,14 @@ mod test {
         assert_eq!(vmt.sub.0.len(), 2);
         assert_eq!(
             vmt.sub.get(b"water_dx60"),
-            Some(&VMTSub::Sub(VMTSubs {
-                0: vec![(
+            Some(&VMTSub::Sub(VMTSubs(
+                vec![(
                     Cow::Borrowed(b"$fallbackmaterial" as &[u8]),
                     VMTSub::Val("nature/blah".into())
                 )]
                 .into_iter()
                 .collect()
-            }))
+            )))
         );
 
         let proxies = vmt.sub.get(b"proxies").unwrap().as_sub().unwrap();

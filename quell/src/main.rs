@@ -1,38 +1,31 @@
 mod data;
 pub mod map;
+mod util;
 
 use std::{
     collections::HashSet,
-    path::Path,
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    pbr::wireframe::{Wireframe, WireframePlugin},
     prelude::*,
-    render::{
-        mesh::Indices,
-        render_resource::{
-            Extent3d, PrimitiveTopology, Texture, TextureDescriptor, TextureDimension,
-            TextureFormat, TextureUsages,
-        },
-        settings::{WgpuFeatures, WgpuSettings},
-    },
+    render::render_resource::PrimitiveTopology,
 };
 use dashmap::DashSet;
-use data::{LoadedTextures, VpkData, VpkState};
-use image::DynamicImage;
+use data::{LoadedTextures, VpkState};
+
 use map::GameMap;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
-    LookTransform, LookTransformPlugin,
+    LookTransformPlugin,
 };
 use vbsp::{Bsp, DisplacementInfo};
 
-use crate::data::{
-    construct_image, construct_material_info, construct_material_info2, GameId, LImage, LMaterial,
+use crate::{
+    data::{construct_image, construct_material_info2, GameId, LMaterial},
+    util::{vec_to_csv, SeriesCalc},
 };
 
 fn main() {
@@ -54,6 +47,7 @@ fn main() {
     //     writeln!(out_file, "{}", key).unwrap();
     // }
 
+    #[allow(clippy::default_constructed_unit_structs)]
     App::new()
         .insert_resource(Msaa::Sample4)
         // .insert_resource(ClearColor(Color::rgb(0.1, 0.2, 0.3)))
@@ -79,11 +73,8 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    // mut ambient_light: ResMut<AmbientLight>,
-    mut asset_server: ResMut<AssetServer>,
     mut vpk: ResMut<VpkState>,
     mut loaded_textures: ResMut<LoadedTextures>,
-    // mut map: Option<ResMut<GameMap>>,
 ) {
     println!("Setup");
     // ambient_light.color = Color::WHITE;
@@ -179,15 +170,15 @@ fn setup(
             })
             .collect::<Vec<_>>()
             .into_iter()
-            .filter_map(move |face_info| {
+            .map(move |face_info| {
                 let mesh = meshes.add(face_info.mesh);
                 let material = materials.add(face_info.material);
 
-                Some(PbrBundle {
+                PbrBundle {
                     mesh,
                     material,
                     ..Default::default()
-                })
+                }
             })
             // We have to collect a second time because spawn_batch requires a 'static
             // iterator
@@ -219,9 +210,9 @@ fn material_names(map: &GameMap) -> Vec<Arc<str>> {
 
             let texture_info = face.texture();
 
-            if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
-                continue;
-            } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
+            if texture_info.flags.contains(vbsp::TextureFlags::NODRAW)
+                || texture_info.flags.contains(vbsp::TextureFlags::SKY)
+            {
                 continue;
             }
 
@@ -278,10 +269,19 @@ fn load_materials(
     // Iterate over all the materials, loading them.
     // Typically, none of the materials will error at all so the size is usually the same as
     // `material_names`
+
+    // let material_m = Arc::new(Mutex::new(MeanCalc::new()));
+    // let image_m = Arc::new(Mutex::new(MeanCalc::new()));
+    let material_m = Arc::new(Mutex::new(SeriesCalc::new()));
+    let image_m = Arc::new(Mutex::new(SeriesCalc::new()));
+
+    let m_mean = material_m.clone();
+    let img_mean = image_m.clone();
     let iter = material_names
         .into_par_iter()
         .filter_map(move |material_name| {
-            match construct_material_info2(vpk2, Some(map), &material_name) {
+            let start_time = std::time::Instant::now();
+            let res = match construct_material_info2(vpk2, Some(map), &material_name) {
                 Ok(info) => Some((material_name, info)),
                 Err(err) => {
                     eprintln!(
@@ -290,7 +290,13 @@ fn load_materials(
                     );
                     None
                 }
-            }
+            };
+            let end_time = std::time::Instant::now();
+
+            let mut mean = m_mean.lock().unwrap();
+            mean.update_dur(end_time - start_time);
+
+            res
         })
         // Check if we need to be the instance loading the texture
         .map(|(material_name, info)| {
@@ -308,8 +314,9 @@ fn load_materials(
                 return Some((material_name, info, None));
             }
 
+            let start_time = std::time::Instant::now();
             let res = construct_image(vpk2, Some(map), &info.base_texture_name);
-            match res {
+            let res = match res {
                 Ok((image, img_src)) => Some((material_name, info, Some((image, img_src)))),
                 Err(err) => {
                     eprintln!(
@@ -318,10 +325,19 @@ fn load_materials(
                     );
                     None
                 }
-            }
+            };
+            let end_time = std::time::Instant::now();
+
+            let mut mean = img_mean.lock().unwrap();
+            mean.update_dur(end_time - start_time);
+
+            res
         })
         .collect::<Vec<_>>();
 
+    println!("L size: #{}", l.len());
+
+    let sub_start_time = std::time::Instant::now();
     for (material_name, info, image) in iter {
         if let Some((image, img_src)) = image {
             loaded_textures.insert_texture_of(
@@ -342,12 +358,26 @@ fn load_materials(
 
     let end_time = std::time::Instant::now();
 
-    println!("Loaded textures in {:?}", end_time - start_time);
+    println!(
+        "Loaded textures in {:?}; (sub) Inserted textures: {:?}",
+        end_time - start_time,
+        end_time - sub_start_time
+    );
+    let material_m = material_m.lock().unwrap();
+    let image_m = image_m.lock().unwrap();
+    println!("Material mean: {:?}", material_m.mean() / 1000.0);
+    println!("Image mean: {:?}", image_m.mean() / 1000.0);
+
+    vec_to_csv(&material_m.entries, "./material.csv").unwrap();
+    vec_to_csv(&image_m.entries, "./image.csv").unwrap();
+
     println!(
         "Duplicates: {}",
         duplicate_counts.load(std::sync::atomic::Ordering::SeqCst)
     );
 
+    // Stop new textures from being loaded.
+    // This is primarily for testing to ensure we don't skip anything.
     loaded_textures.frozen = true;
 
     Ok(())
@@ -368,11 +398,11 @@ fn construct_face_cmd(
     let texture_info = face.texture();
     let texture_data = texture_info.texture_data();
 
-    if texture_info.flags.contains(vbsp::TextureFlags::NODRAW) {
-        // TODO: create nodraw meshes but hide them so we can render them in debug mode
-        return Ok(None);
-    } else if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-        // TODO: create the skybox
+    // TODO: create nodraw meshes but hide them so we can render them in debug mode
+    // TODO: create the skybox
+    if texture_info.flags.contains(vbsp::TextureFlags::NODRAW)
+        || texture_info.flags.contains(vbsp::TextureFlags::SKY)
+    {
         return Ok(None);
     }
 
@@ -573,7 +603,7 @@ fn create_displacement_mesh<'a>(
     let mut corner_verts = [[0.0, 0.0, 0.0]; 4];
     let mut base_i = None;
     let mut base_dist = std::f32::INFINITY;
-    for i in 0..4 {
+    for (i, corner_vert) in corner_verts.iter_mut().enumerate() {
         let surface_edge = bsp
             .surface_edges
             .get((face.first_edge + i as i32) as usize)
@@ -589,7 +619,7 @@ fn create_displacement_mesh<'a>(
         // let vertex = [vertex[0] * SCALE, vertex[1] * SCALE, vertex[2] * SCALE];
         // let vertex = rotate(vertex);
 
-        corner_verts[i] = vertex;
+        *corner_vert = vertex;
 
         let this_dist = (vertex[0] - low_base[0]).abs()
             + (vertex[2] - low_base[2]).abs()
