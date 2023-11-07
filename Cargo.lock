@@ -1284,6 +1284,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
+name = "cachedhash"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a5158f7a62a81ff1f8d8c24ad8a4ae0b8df101176a2f84709bd67af6d6f2733"
+
+[[package]]
 name = "cc"
 version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3714,7 +3720,9 @@ name = "vpk"
 version = "0.1.4"
 dependencies = [
  "binread",
+ "cachedhash",
  "indexmap 2.1.0",
+ "memchr",
  "thiserror",
 ]
 

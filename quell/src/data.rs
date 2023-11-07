@@ -13,7 +13,7 @@ use indexmap::Equivalent;
 use vmt::{ShaderName, VMTError, VMTItem, VMT};
 use vpk::{
     access::{DirFile, DirFileBigRefLowercase},
-    vpk::Ext,
+    vpk::{Ext, ProbableKind},
 };
 
 use crate::map::GameMap;
@@ -559,11 +559,19 @@ impl VpkState {
         let hl2_path = root_path.join(GameId::Hl2.folder());
         let game_path = root_path.join(game_id.folder());
 
-        let hl2_textures = VpkData::load(hl2_path.join("hl2_textures_dir.vpk"))?;
-        let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"))?;
-        let textures =
-            VpkData::load(game_path.join(format!("{}_textures_dir.vpk", game_id.prefix())))?;
-        let misc = VpkData::load(game_path.join(format!("{}_misc_dir.vpk", game_id.prefix())))?;
+        let hl2_textures = VpkData::load(
+            hl2_path.join("hl2_textures_dir.vpk"),
+            ProbableKind::Hl2Textures,
+        )?;
+        let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"), ProbableKind::Hl2Misc)?;
+        let textures = VpkData::load(
+            game_path.join(format!("{}_textures_dir.vpk", game_id.prefix())),
+            ProbableKind::Tf2Textures,
+        )?;
+        let misc = VpkData::load(
+            game_path.join(format!("{}_misc_dir.vpk", game_id.prefix())),
+            ProbableKind::Tf2Misc,
+        )?;
 
         // TODO: sound
         Ok(VpkState {
@@ -664,8 +672,11 @@ pub struct VpkData {
 }
 impl VpkData {
     // TODO: use paths
-    pub fn load(path: impl AsRef<Path>) -> Result<VpkData, vpk::Error> {
-        let data = vpk::from_path(path)?;
+    pub fn load(
+        path: impl AsRef<Path>,
+        probable_kind: ProbableKind,
+    ) -> Result<VpkData, vpk::Error> {
+        let data = vpk::from_path(path, probable_kind)?;
         Ok(VpkData { data })
     }
 
