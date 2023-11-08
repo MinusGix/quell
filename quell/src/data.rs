@@ -10,6 +10,7 @@ use bevy::{
     },
 };
 use indexmap::Equivalent;
+use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use vmt::{ShaderName, VMTError, VMTItem, VMT};
 use vpk::{
     access::{DirFile, DirFileBigRefLowercase},
@@ -552,26 +553,54 @@ pub struct VpkState {
 impl VpkState {
     /// Create a new [`VpkState`] from the path to the game folder.  
     /// Ex: `C:\Program Files (x86)\Steam\steamapps\common\Team Fortress 2\`  
-    /// `game_part` should be the name of the game-specific folder data, like `tf`
+    /// `game_part` should be the name of the game-specific folder data, like `tf`  
+    ///   
+    /// Impl note: These are loaded in parallel since currently parsing a dir vpk is actually
+    /// relatively slow (8ms for hl2_misc_dir) or pretty slow (30ms for tf2_misc_dir)  
+    /// This will be bottlenecked by the slowest entry, however.
     pub fn new(root_path: impl AsRef<Path>, game_id: GameId) -> eyre::Result<VpkState> {
         // TODO: for hl2 this would end up loading things multiple times
         let root_path = root_path.as_ref();
         let hl2_path = root_path.join(GameId::Hl2.folder());
         let game_path = root_path.join(game_id.folder());
 
-        let hl2_textures = VpkData::load(
-            hl2_path.join("hl2_textures_dir.vpk"),
-            ProbableKind::Hl2Textures,
-        )?;
-        let hl2_misc = VpkData::load(hl2_path.join("hl2_misc_dir.vpk"), ProbableKind::Hl2Misc)?;
-        let textures = VpkData::load(
-            game_path.join(format!("{}_textures_dir.vpk", game_id.prefix())),
-            ProbableKind::Tf2Textures,
-        )?;
-        let misc = VpkData::load(
-            game_path.join(format!("{}_misc_dir.vpk", game_id.prefix())),
-            ProbableKind::Tf2Misc,
-        )?;
+        let data: &[(&Path, Cow<'_, str>, ProbableKind)] = &[
+            (
+                &hl2_path,
+                Cow::Borrowed("hl2_textures_dir.vpk"),
+                ProbableKind::Hl2Textures,
+            ),
+            (
+                &hl2_path,
+                Cow::Borrowed("hl2_misc_dir.vpk"),
+                ProbableKind::Hl2Misc,
+            ),
+            (
+                &game_path,
+                Cow::Owned(format!("{}_textures_dir.vpk", game_id.prefix())),
+                ProbableKind::Tf2Textures,
+            ),
+            (
+                &game_path,
+                Cow::Owned(format!("{}_misc_dir.vpk", game_id.prefix())),
+                ProbableKind::Tf2Misc,
+            ),
+        ];
+
+        // TODO(minor): We really shouldn't need to collect into a vec here...
+        let mut res = data
+            .par_iter()
+            .map(|(path, filename, kind)| {
+                let path = path.join(filename.as_ref());
+                VpkData::load(path, *kind)
+            })
+            .collect::<Result<Vec<_>, vpk::Error>>()?;
+
+        // We deconstruct the vec into our fields, we don't want to clone
+        let hl2_textures = res.remove(0);
+        let hl2_misc = res.remove(0);
+        let textures = res.remove(0);
+        let misc = res.remove(0);
 
         // TODO: sound
         Ok(VpkState {

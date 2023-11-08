@@ -3719,6 +3719,7 @@ version = "0.1.0"
 name = "vpk"
 version = "0.1.4"
 dependencies = [
+ "ahash",
  "binread",
  "cachedhash",
  "indexmap 2.1.0",
