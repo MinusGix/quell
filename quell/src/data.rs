@@ -10,7 +10,7 @@ use bevy::{
     },
 };
 use indexmap::Equivalent;
-use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use vmt::{ShaderName, VMTError, VMTItem, VMT};
 use vpk::{
     access::{DirFile, DirFileBigRefLowercase},
@@ -23,9 +23,9 @@ use crate::map::GameMap;
 
 // TODO: on map change you should remove all 'map' textures
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LSrc {
-    /// Fomr `hl2/hl2_textures_dir.vpk`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VPKSrc {
+    /// From `hl2/hl2_textures_dir.vpk`
     HL2Textures,
     /// From `hl2/hl2_misc_dir.vpk`
     HL2Misc,
@@ -33,7 +33,17 @@ pub enum LSrc {
     TexturesVPK,
     /// Main misc
     MiscVPK,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LSrc {
+    Vpk(VPKSrc),
     Map,
+}
+impl From<VPKSrc> for LSrc {
+    fn from(src: VPKSrc) -> Self {
+        LSrc::Vpk(src)
+    }
 }
 
 pub type MaterialName = Arc<str>;
@@ -289,6 +299,7 @@ impl LoadedTextures {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LoadingMaterialInfo {
     pub vmt_src: LSrc,
     pub base_texture_name: Arc<str>,
@@ -611,6 +622,30 @@ impl VpkState {
         })
     }
 
+    pub fn iter_vpks(&self) -> impl Iterator<Item = (VPKSrc, &VpkData)> {
+        [
+            (VPKSrc::HL2Textures, &self.hl2_textures),
+            (VPKSrc::HL2Misc, &self.hl2_misc),
+            (VPKSrc::TexturesVPK, &self.textures),
+            (VPKSrc::MiscVPK, &self.misc),
+        ]
+        .into_iter()
+    }
+
+    pub fn src(&self, src: &VPKSrc) -> Option<&VpkData> {
+        match src {
+            VPKSrc::HL2Textures => Some(&self.hl2_textures),
+            VPKSrc::HL2Misc => Some(&self.hl2_misc),
+            VPKSrc::TexturesVPK => Some(&self.textures),
+            VPKSrc::MiscVPK => Some(&self.misc),
+        }
+    }
+
+    pub fn archive_path(&self, src: &VPKSrc, archive_index: u16) -> Option<&str> {
+        let src = self.src(&src)?;
+        src.data.archive_path(archive_index)
+    }
+
     /// Find an entry in the loaded vpks.  
     /// This ignores case.
     pub fn find<'a>(
@@ -618,48 +653,46 @@ impl VpkState {
         ext: &Ext<'_>,
         dir: &str,
         filename: &str,
-    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
+    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, VPKSrc)> {
         if let Some(entry) = self.hl2_textures.find(ext, dir, filename) {
-            return Some((entry, LSrc::HL2Textures));
+            return Some((entry, VPKSrc::HL2Textures));
         }
 
         if let Some(entry) = self.hl2_misc.find(ext, dir, filename) {
-            return Some((entry, LSrc::HL2Misc));
+            return Some((entry, VPKSrc::HL2Misc));
         }
 
         if let Some(entry) = self.textures.find(ext, dir, filename) {
-            return Some((entry, LSrc::TexturesVPK));
+            return Some((entry, VPKSrc::TexturesVPK));
         }
 
         if let Some(entry) = self.misc.find(ext, dir, filename) {
-            return Some((entry, LSrc::MiscVPK));
+            return Some((entry, VPKSrc::MiscVPK));
         }
 
         None
     }
 
-    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
-        // println!("Find VMT {name:?}");
+    pub fn find_vmt<'a>(&'a self, name: &str) -> Option<(vpk::entry::VPKEntryHandle<'a>, VPKSrc)> {
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vmt").unwrap_or(name);
 
         let re = DirFileBigRefLowercase::new("materials", name);
-        // println!("-> {name:?} -> {re:?}");
 
         if let Some(entry) = self.hl2_textures.find_vmt_direct(re) {
-            return Some((entry, LSrc::HL2Textures));
+            return Some((entry, VPKSrc::HL2Textures));
         }
 
         if let Some(entry) = self.hl2_misc.find_vmt_direct(re) {
-            return Some((entry, LSrc::HL2Misc));
+            return Some((entry, VPKSrc::HL2Misc));
         }
 
         if let Some(entry) = self.textures.find_vmt_direct(re) {
-            return Some((entry, LSrc::TexturesVPK));
+            return Some((entry, VPKSrc::TexturesVPK));
         }
 
         if let Some(entry) = self.misc.find_vmt_direct(re) {
-            return Some((entry, LSrc::MiscVPK));
+            return Some((entry, VPKSrc::MiscVPK));
         }
 
         None
@@ -670,26 +703,26 @@ impl VpkState {
     pub fn find_texture<'a>(
         &'a self,
         name: &str,
-    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, LSrc)> {
+    ) -> Option<(vpk::entry::VPKEntryHandle<'a>, VPKSrc)> {
         let name = name.strip_prefix("materials/").unwrap_or(name);
         let name = name.strip_suffix(".vtf").unwrap_or(name);
 
         let re = DirFileBigRefLowercase::new("materials", name);
 
         if let Some(entry) = self.hl2_textures.find_texture_direct(re) {
-            return Some((entry, LSrc::HL2Textures));
+            return Some((entry, VPKSrc::HL2Textures));
         }
 
         if let Some(entry) = self.hl2_misc.find_texture_direct(re) {
-            return Some((entry, LSrc::HL2Misc));
+            return Some((entry, VPKSrc::HL2Misc));
         }
 
         if let Some(entry) = self.textures.find_texture_direct(re) {
-            return Some((entry, LSrc::TexturesVPK));
+            return Some((entry, VPKSrc::TexturesVPK));
         }
 
         if let Some(entry) = self.misc.find_texture_direct(re) {
-            return Some((entry, LSrc::MiscVPK));
+            return Some((entry, VPKSrc::MiscVPK));
         }
 
         None
@@ -750,13 +783,13 @@ fn load_texture(
     map: Option<&GameMap>,
     name: &str,
 ) -> Result<(image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, LSrc), TextureError> {
-    let (tex, src) = find_texture(vpk, map, name)?;
+    let (tex, src) = find_texture_data(vpk, map, name)?;
     let tex = vtf::from_bytes(&tex)?;
     let image = tex.highres_image.decode(0)?;
     Ok((image.into_rgba8(), src))
 }
 
-fn find_texture<'a>(
+fn find_texture_data<'a>(
     vpk: &'a VpkState,
     map: Option<&'a GameMap>,
     name: &str,
@@ -764,13 +797,42 @@ fn find_texture<'a>(
     // TODO: does map take precedence over vpks?
     if let Some((tex, src)) = vpk.find_texture(name) {
         let tex = tex.get()?;
-        Ok((tex, src))
+        Ok((tex, src.into()))
     } else if let Some(map) = map {
-        let (tex, src) = map
-            .find_texture(name)
+        let tex = map
+            .get_texture_data(name)
             .ok_or_else(|| TextureError::FindFailure(name.to_string()))?;
-        Ok((Cow::Owned(tex), src))
+        Ok((Cow::Owned(tex), LSrc::Map))
     } else {
+        // TODO: don't panic, this is mostly for testing
+        panic!("Failed to find texture {name:?}");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileLoc {
+    Vpk { src: VPKSrc, archive_index: u16 },
+    Map,
+}
+
+pub(crate) fn find_texture<'a>(
+    vpk: &'a VpkState,
+    map: Option<&'a GameMap>,
+    name: &str,
+) -> Result<FileLoc, TextureError> {
+    if let Some((tex, src)) = vpk.find_texture(name) {
+        Ok(FileLoc::Vpk {
+            src,
+            archive_index: tex.archive_index(),
+        })
+    } else if let Some(map) = map {
+        if map.has_texture(name) {
+            Ok(FileLoc::Map)
+        } else {
+            Err(TextureError::FindFailure(name.to_string()))
+        }
+    } else {
+        // TODO: don't panic, this is mostly for testing
         panic!("Failed to find texture {name:?}");
     }
 }
@@ -783,7 +845,7 @@ fn find_vmt<'a>(
     // TODO: does map take precedence over vpks?
     if let Some((tex, src)) = vpk.find_vmt(name) {
         let tex = tex.get()?;
-        Ok((tex, src))
+        Ok((tex, src.into()))
     } else if let Some(map) = map {
         let (tex, src) = map
             .find_vmt(name)

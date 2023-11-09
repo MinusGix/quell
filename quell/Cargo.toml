@@ -26,3 +26,4 @@ vmt = { path = "../vmt/" }
 rayon = "1.8.0"
 dashmap = "5.5.3"
 indexmap = "2.1.0"
+memmap2 = "0.9.0"

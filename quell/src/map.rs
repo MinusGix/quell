@@ -37,14 +37,22 @@ impl GameMap {
         Some((res, LSrc::Map))
     }
 
-    pub fn find_texture(&self, name: &str) -> Option<(Vec<u8>, LSrc)> {
-        // let zip = self.bsp.pack.zip.lock().unwrap();
-        // for testing print the top level
-        // for k in zip.file_names() {
-        //     println!("- {k}");
-        // }
+    pub fn has_texture(&self, name: &str) -> bool {
+        let name = if name.starts_with("materials/") && name.ends_with(".vtf") {
+            Cow::Borrowed(name)
+        } else if name.starts_with("materials/")
+        /* && !name.ends_with(".vtf") */
+        {
+            Cow::Owned(format!("{}.vtf", name))
+        } else {
+            Cow::Owned(format!("materials/{}.vtf", name))
+        };
+        self.bsp.pack.contains(&name).unwrap_or(false)
+    }
 
-        // let name = format!("materials/{}.vtf", name);
+    // TODO: we could modify it to read texture data into a caller's buffer to more efficiently
+    // reuse an allocation
+    pub fn get_texture_data(&self, name: &str) -> Option<Vec<u8>> {
         let name = if name.starts_with("materials/") && name.ends_with(".vtf") {
             Cow::Borrowed(name)
         } else if name.starts_with("materials/")
@@ -55,6 +63,6 @@ impl GameMap {
             Cow::Owned(format!("materials/{}.vtf", name))
         };
         let res = self.bsp.pack.get(&name).unwrap()?;
-        Some((res, LSrc::Map))
+        Some(res)
     }
 }

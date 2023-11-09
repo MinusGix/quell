@@ -1091,26 +1091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "binread"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "258d2d861723c05ad02956cae4878ceddb5e05b0dc2841ca73a3479ab7a46f4d"
-dependencies = [
- "binread_derive",
-]
-
-[[package]]
-name = "binread_derive"
-version = "1.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d63ec80ac459fd10ae68854c26ee1c5ab5ac93866dba8f8a95cabbfeaa79b284"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "binrw"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2429,6 +2409,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f665ee40bc4a3c5590afb1e9677db74a508659dfd71e126420da8274909a0167"
 
 [[package]]
+name = "memmap2"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deaba38d7abf1d4cca21cc89e932e542ba2b9258664d2a9ef0e61512039c9375"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3007,6 +2996,7 @@ dependencies = [
  "eyre",
  "image",
  "indexmap 2.1.0",
+ "memmap2",
  "rayon",
  "smooth-bevy-cameras",
  "vbsp",
@@ -3720,7 +3710,6 @@ name = "vpk"
 version = "0.1.4"
 dependencies = [
  "ahash",
- "binread",
  "cachedhash",
  "indexmap 2.1.0",
  "memchr",
