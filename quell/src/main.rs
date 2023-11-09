@@ -63,6 +63,9 @@ fn setup(
     mut loaded_textures: ResMut<LoadedTextures>,
 ) {
     println!("Setup");
+
+    loaded_textures.missing_texture = images.add(quell::material::missing_texture());
+
     // ambient_light.color = Color::WHITE;
     // ambient_light.brightness = 0.05;
 
@@ -187,6 +190,9 @@ struct FaceInfo {
     material: StandardMaterial,
 }
 
+/// Construct the information needed to create a face.
+/// This currently expects any textures to already be loaded so that it can easily be used in
+/// parallel.
 fn construct_face_cmd(
     loaded_textures: &LoadedTextures,
     map: &GameMap,
@@ -234,10 +240,17 @@ fn construct_face_cmd(
         Ok(Some(FaceInfo { mesh, material }))
     } else {
         let texture_name = texture_info.name();
-        let texture = loaded_textures
-            .find_material_texture(texture_name)
-            .unwrap()
-            .unwrap();
+        let texture = match loaded_textures.find_material_texture(texture_name) {
+            Some(Ok(texture)) => texture,
+            Some(Err(err)) => {
+                eprintln!("Failed to load texture: {:?}", err);
+                loaded_textures.missing_texture.clone()
+            }
+            None => {
+                eprintln!("Missing texture: {:?}", texture_name);
+                loaded_textures.missing_texture.clone()
+            }
+        };
 
         let (mesh, material) = create_basic_map_mesh(&map.bsp, face, color, Some(texture));
 

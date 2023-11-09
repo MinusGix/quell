@@ -4,7 +4,15 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
-use bevy::prelude::{Assets, Image};
+use bevy::{
+    prelude::{Assets, Color, Image},
+    render::{
+        render_resource::{
+            Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+        },
+        texture::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    },
+};
 use dashmap::DashSet;
 use rayon::{
     prelude::{IntoParallelIterator, ParallelIterator},
@@ -452,4 +460,40 @@ fn load_materials2(
     loaded_textures.frozen = true;
 
     Ok(())
+}
+
+pub fn missing_texture() -> Image {
+    // Pink and black checkerboard
+    #[rustfmt::skip]
+    let data = vec![
+        255, 0, 255, 255, /**/   0, 0, 0, 255, 
+        0, 0, 0, 255,     /**/ 255, 0, 255, 255,
+    ];
+    Image {
+        data,
+        texture_descriptor: TextureDescriptor {
+            label: None,
+            size: Extent3d {
+                width: 2,
+                height: 2,
+                ..Default::default()
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8UnormSrgb,
+            // TODO: no clue what I should use here
+            usage: TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST
+                | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        sampler: ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            address_mode_w: ImageAddressMode::Repeat,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }

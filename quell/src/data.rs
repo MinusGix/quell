@@ -144,6 +144,7 @@ pub struct LImage {
 /// These are (typically? always?) from the `materials/` folder
 #[derive(Default, Clone, Resource)]
 pub struct LoadedTextures {
+    pub missing_texture: Handle<Image>,
     pub vmt: HashMap<MaterialName, LMaterial>,
     pub vtf: HashMap<TextureName, LImage>,
     /// Whether it should refuse to load any more materials/textures
