@@ -524,6 +524,7 @@ pub fn construct_image(
     ))
 }
 
+#[derive(Debug, Clone)]
 pub enum GameId {
     Tf2,
     Hl2,
