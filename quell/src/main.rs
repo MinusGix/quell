@@ -51,6 +51,8 @@ fn main() {
         .add_plugins(LogDiagnosticsPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(Startup, setup)
+        // Not sure if this should be preupdate or not
+        .add_systems(PreUpdate, update_visibility)
         .run();
 }
 
@@ -144,11 +146,16 @@ fn setup(
                 let start = m.first_face as usize;
                 let end = start + m.face_count as usize;
 
-                map.bsp.faces[start..end].par_iter()
+                // TODO: do coordinates need to be rotated?
+                let origin = Vec3::new(m.origin.x, m.origin.y, m.origin.z);
+
+                map.bsp.faces[start..end]
+                    .par_iter()
+                    .map(move |x| (origin, x))
             })
-            .filter_map(|face| {
+            .filter_map(|(origin, face)| {
                 let face = vbsp::Handle::new(&map.bsp, face);
-                let res = construct_face_cmd(&loaded_textures, &map, face).transpose()?;
+                let res = construct_face_cmd(&loaded_textures, &map, face, origin).transpose()?;
                 match res {
                     Ok(face_info) => Some(face_info),
                     Err(err) => {
@@ -160,12 +167,18 @@ fn setup(
             .collect::<Vec<_>>()
             .into_iter()
             .map(move |face_info| {
-                let mesh = meshes.add(face_info.mesh);
-                let material = materials.add(face_info.material);
+                let FaceInfo {
+                    mesh,
+                    material,
+                    transform,
+                } = face_info;
+                let mesh = meshes.add(mesh);
+                let material = materials.add(material);
 
                 PbrBundle {
                     mesh,
                     material,
+                    transform,
                     ..Default::default()
                 }
             })
@@ -183,11 +196,16 @@ fn setup(
     }
 }
 
+fn update_visibility(mut commands: Commands, mut meshes: Res<Assets<Mesh>>, map: Res<GameMap>) {
+    // TODO
+}
+
 const SCALE: f32 = 0.1;
 
 struct FaceInfo {
     mesh: Mesh,
     material: StandardMaterial,
+    transform: Transform,
 }
 
 /// Construct the information needed to create a face.
@@ -197,6 +215,7 @@ fn construct_face_cmd(
     loaded_textures: &LoadedTextures,
     map: &GameMap,
     face: vbsp::Handle<'_, vbsp::Face>,
+    offset: Vec3,
 ) -> eyre::Result<Option<FaceInfo>> {
     let texture_info = face.texture();
     let texture_data = texture_info.texture_data();
@@ -235,9 +254,9 @@ fn construct_face_cmd(
     };
 
     if let Some(disp) = face.displacement() {
-        let (mesh, material) = create_displacement_mesh(&map.bsp, face, disp, color);
-
-        Ok(Some(FaceInfo { mesh, material }))
+        Ok(Some(create_displacement_mesh(
+            &map.bsp, face, disp, offset, color,
+        )))
     } else {
         let texture_name = texture_info.name();
         let texture = match loaded_textures.find_material_texture(texture_name) {
@@ -252,9 +271,13 @@ fn construct_face_cmd(
             }
         };
 
-        let (mesh, material) = create_basic_map_mesh(&map.bsp, face, color, Some(texture));
-
-        Ok(Some(FaceInfo { mesh, material }))
+        Ok(Some(create_basic_map_mesh(
+            &map.bsp,
+            face,
+            offset,
+            color,
+            Some(texture),
+        )))
     }
 }
 
@@ -264,9 +287,10 @@ fn construct_face_cmd(
 fn create_basic_map_mesh<'a>(
     bsp: &'a Bsp,
     face: vbsp::Handle<'a, vbsp::Face>,
+    offset: Vec3,
     color: Color,
     texture: Option<Handle<Image>>,
-) -> (Mesh, StandardMaterial) {
+) -> FaceInfo {
     let texture_info = face.texture();
     let tex_width = texture_info.texture().width as f32;
     let tex_height = texture_info.texture().height as f32;
@@ -343,6 +367,7 @@ fn create_basic_map_mesh<'a>(
         // alpha_mode: AlphaMode::Blend,
         // unlit: true,
         // emissive_texture: texture,
+        // TODO: determine this properly
         alpha_mode: if color.a() < 1.0 {
             AlphaMode::Blend
         } else {
@@ -359,7 +384,11 @@ fn create_basic_map_mesh<'a>(
         ..Default::default()
     };
 
-    (mesh, material)
+    FaceInfo {
+        mesh,
+        material,
+        transform: Transform::from_translation(offset),
+    }
 }
 
 /// Calculate the UV coordinates for the given vertex and texture.
@@ -400,8 +429,9 @@ fn create_displacement_mesh<'a>(
     bsp: &'a vbsp::Bsp,
     face: vbsp::Handle<'a, vbsp::Face>,
     disp: vbsp::Handle<'a, DisplacementInfo>,
+    offset: Vec3,
     color: Color,
-) -> (Mesh, StandardMaterial) {
+) -> FaceInfo {
     let low_base = disp.start_position; // * SCALE;
     let low_base = <[f32; 3]>::from(low_base);
     // let low_base = rotate(low_base);
@@ -559,7 +589,11 @@ fn create_displacement_mesh<'a>(
 
     let material: StandardMaterial = color.into();
 
-    (mesh, material)
+    FaceInfo {
+        mesh,
+        material,
+        transform: Transform::from_translation(offset),
+    }
 }
 
 fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
