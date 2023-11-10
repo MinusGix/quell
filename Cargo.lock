@@ -3176,6 +3176,7 @@ name = "quell"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bv",
  "criterion",
  "dashmap",
  "eyre",

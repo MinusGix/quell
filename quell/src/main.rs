@@ -1,20 +1,20 @@
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     prelude::*,
-    render::render_resource::PrimitiveTopology,
-};
-use quell::{
-    data::{GameId, LoadedTextures, VpkState},
-    material::load_materials,
 };
 
-use quell::map::GameMap;
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use quell::{
+    data::{GameId, LoadedTextures, VpkState},
+    map::GameMap,
+    material::load_materials,
+    mesh::{construct_meshes, FaceInfo},
+};
+
+use rayon::prelude::ParallelIterator;
 use smooth_bevy_cameras::{
     controllers::unreal::{UnrealCameraBundle, UnrealCameraController, UnrealCameraPlugin},
     LookTransformPlugin,
 };
-use vbsp::{Bsp, DisplacementInfo};
 
 fn main() {
     // TODO: we should probably load vpks in setup so we can have a loading screen nicely
@@ -55,6 +55,12 @@ fn main() {
         .add_systems(PreUpdate, update_visibility)
         .run();
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct BSPHeadNode(pub i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct LeafFaceId(pub u16);
 
 fn setup(
     mut commands: Commands,
@@ -138,32 +144,7 @@ fn setup(
 
         println!("Model count: #{}", map.bsp.models.len());
 
-        let cmds = map
-            .bsp
-            .models
-            .par_iter()
-            .flat_map(|m| {
-                let start = m.first_face as usize;
-                let end = start + m.face_count as usize;
-
-                // TODO: do coordinates need to be rotated?
-                let origin = Vec3::new(m.origin.x, m.origin.y, m.origin.z);
-
-                map.bsp.faces[start..end]
-                    .par_iter()
-                    .map(move |x| (origin, x))
-            })
-            .filter_map(|(origin, face)| {
-                let face = vbsp::Handle::new(&map.bsp, face);
-                let res = construct_face_cmd(&loaded_textures, &map, face, origin).transpose()?;
-                match res {
-                    Ok(face_info) => Some(face_info),
-                    Err(err) => {
-                        eprintln!("Failed to construct face: {:?}", err);
-                        None
-                    }
-                }
-            })
+        let cmds = construct_meshes(&loaded_textures, &map)
             .collect::<Vec<_>>()
             .into_iter()
             .map(move |face_info| {
@@ -175,12 +156,12 @@ fn setup(
                 let mesh = meshes.add(mesh);
                 let material = materials.add(material);
 
-                PbrBundle {
+                (PbrBundle {
                     mesh,
                     material,
                     transform,
                     ..Default::default()
-                }
+                },)
             })
             // We have to collect a second time because spawn_batch requires a 'static
             // iterator
@@ -196,446 +177,107 @@ fn setup(
     }
 }
 
-fn update_visibility(mut commands: Commands, mut meshes: Res<Assets<Mesh>>, map: Res<GameMap>) {
-    // TODO
-}
+// TODO: possibly we should group faces under one parent node so we can hide them all at once?
+fn update_visibility(
+    commands: Commands,
+    meshes: Res<Assets<Mesh>>,
+    map: Res<GameMap>,
+    mut nodes: Query<(&BSPHeadNode, &mut Visibility, &Transform)>,
+    cameras: Query<(&UnrealCameraController, &Transform)>,
+) {
+    // The way visibility works in BSP is that each point is in exactly one leaf (which are convex,
+    // but whatever).
+    // Enterable leaves (visleaves) gets a 'cluster number'.
+    // Essentially the cluster number is just an id for areas you can be in, which determines what
+    // other areas are visible, thus saving work at runtime.
 
-const SCALE: f32 = 0.1;
+    // TODO: bsp article mentions that there is only ever one leaf per cluster in old source maps,
+    // but some CS:GO maps have multiple leaves in the same cluster, do we support that?
 
-struct FaceInfo {
-    mesh: Mesh,
-    material: StandardMaterial,
-    transform: Transform,
-}
+    // // We iterate over all the entities with a BSP head node (currently faces) to get the node that
+    // // they are at (since BSP is a tree, the leaves are somewhere below, I believe?)
+    // for (head_node, visibility, transform) in head_nodes.iter() {
+    //     // let node = map.bsp.node(head_node.0).unwrap();
+    //     let pos = transform.translation;
+    //     let pos = vbsp::Vector {
+    //         x: pos.x,
+    //         y: pos.y,
+    //         z: pos.z,
+    //     };
+    //     // TODO: I don't know if this is the best method
+    //     let leaf = map.bsp.leaf_at(pos);
 
-/// Construct the information needed to create a face.
-/// This currently expects any textures to already be loaded so that it can easily be used in
-/// parallel.
-fn construct_face_cmd(
-    loaded_textures: &LoadedTextures,
-    map: &GameMap,
-    face: vbsp::Handle<'_, vbsp::Face>,
-    offset: Vec3,
-) -> eyre::Result<Option<FaceInfo>> {
-    let texture_info = face.texture();
-    let texture_data = texture_info.texture_data();
+    //     // todo
+    // }
 
-    // TODO: create nodraw meshes but hide them so we can render them in debug mode
-    // TODO: create the skybox
-    if texture_info.flags.contains(vbsp::TextureFlags::NODRAW)
-        || texture_info.flags.contains(vbsp::TextureFlags::SKY)
-    {
-        return Ok(None);
-    }
+    // TODO: we can probably compute this more efficiently by just iterating over the visible
+    // clusters in the visdata directly, and thus avoid any allocs
+    // Though the obvious way of iterating that I can see has the issue that we'd have to set
+    // visibility to hidden for all of them, and then undo that, but unless they do something fancy
+    // that should be cheap & fine?
+    // let mut visible_clusters = BitVec::new();
 
-    let texture_name = texture_info.name();
+    // // Compute the visible clusters from the camera locations.
+    // // We have to allow separate cameras, because they could be in different locations.
+    // for (_camera, transform) in cameras.iter() {
+    //     let pos = transform.translation;
+    //     let pos = vbsp::Vector {
+    //         x: pos.x,
+    //         y: pos.y,
+    //         z: pos.z,
+    //     };
+    //     // TODO: I don't know if this is the best method to find the leaf?
+    //     let leaf = map.bsp.leaf_at(pos);
+    //     let cluster = leaf.cluster;
 
-    // TODO: this probably ignores other pieces that we shouldn't render
-    if texture_name.eq_ignore_ascii_case("tools/toolstrigger") {
-        return Ok(None);
-    }
+    //     let mut vis = map.bsp.vis_data.visible_clusters(cluster);
+    //     if visible_clusters.is_empty() {
+    //         visible_clusters = vis;
+    //     } else {
+    //         // First we have to ensure their length matches unfortunately
+    //         if visible_clusters.len() < vis.len() {
+    //             visible_clusters.resize(vis.len(), false);
+    //         } else if visible_clusters.len() > vis.len() {
+    //             vis.resize(visible_clusters.len(), false);
+    //         }
+    //         // Combine it with visible clusters
+    //         visible_clusters.bit_or_assign(&vis);
+    //     }
+    // }
 
-    let reflect = texture_data.reflectivity;
-    let color = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-        Color::rgb(0.0, 0.0, 0.0)
-    } else {
-        let alpha = if texture_info.flags.contains(vbsp::TextureFlags::TRANS) {
-            0.2
-        } else {
-            1.0
+    let mut visible_sets = Vec::with_capacity(2);
+    for (_camera, transform) in cameras.iter() {
+        let pos = transform.translation;
+        let pos = vbsp::Vector {
+            x: pos.x,
+            y: pos.y,
+            z: pos.z,
         };
-
-        // TODO: actually just get this texture
-        if texture_name == "water/water_2fort_beneath.vmt" {
-            Color::rgba(0.0, 0.0, 0.8, 0.4)
-        } else {
-            Color::rgba(reflect.x, reflect.y, reflect.z, alpha)
-        }
-    };
-
-    if let Some(disp) = face.displacement() {
-        Ok(Some(create_displacement_mesh(
-            &map.bsp, face, disp, offset, color,
-        )))
-    } else {
-        let texture_name = texture_info.name();
-        let texture = match loaded_textures.find_material_texture(texture_name) {
-            Some(Ok(texture)) => texture,
-            Some(Err(err)) => {
-                eprintln!("Failed to load texture: {:?}", err);
-                loaded_textures.missing_texture.clone()
-            }
-            None => {
-                eprintln!("Missing texture: {:?}", texture_name);
-                loaded_textures.missing_texture.clone()
-            }
-        };
-
-        Ok(Some(create_basic_map_mesh(
-            &map.bsp,
-            face,
-            offset,
-            color,
-            Some(texture),
-        )))
-    }
-}
-
-// TODO: we don't create the map mesh with a transform yet it is positioned fine, so probably the
-// triangles are being positioned 'manually'. I think we should maybe try getting them to center on
-// 0,0,0 and then apply a transform to make it work nicer with other transform stuff
-fn create_basic_map_mesh<'a>(
-    bsp: &'a Bsp,
-    face: vbsp::Handle<'a, vbsp::Face>,
-    offset: Vec3,
-    color: Color,
-    texture: Option<Handle<Image>>,
-) -> FaceInfo {
-    let texture_info = face.texture();
-    let tex_width = texture_info.texture().width as f32;
-    let tex_height = texture_info.texture().height as f32;
-
-    let normal = if texture_info.flags.contains(vbsp::TextureFlags::SKY) {
-        [0.0, 0.0, 1.0]
-    } else {
-        let plane = bsp.planes.get(face.plane_num as usize).unwrap();
-        plane.normal.into()
-    };
-    // let normal = [-normal[0], -normal[2], -normal[1]];
-    // TODO: do we need to rotate the normal?
-
-    // TODO(minor): preallocate
-    let mut face_triangles = Vec::new();
-    let mut face_normals = Vec::new();
-    let mut face_uvs = Vec::new();
-
-    let mut triangle_vert = 0;
-    let mut triangle = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
-    for i in 0..face.num_edges {
-        let surface_edge = bsp
-            .surface_edges
-            .get((face.first_edge + i as i32) as usize)
-            .unwrap();
-        let edge = bsp.edges.get(surface_edge.edge_index() as usize).unwrap();
-        let vertex_index = match surface_edge.direction() {
-            vbsp::EdgeDirection::FirstToLast => edge.start_index,
-            vbsp::EdgeDirection::LastToFirst => edge.end_index,
-        };
-
-        let vertex = bsp.vertices.get(vertex_index as usize).unwrap();
-        let vertex = <[f32; 3]>::from(vertex.position);
-        let vertex = [vertex[0] * SCALE, vertex[1] * SCALE, vertex[2] * SCALE];
-        let vertex = rotate(vertex);
-
-        triangle[triangle_vert] = vertex;
-        triangle_vert += 1;
-
-        if triangle_vert > 2 {
-            // TODO: I swapped the order of these because my rotate also made the z neg
-            // and that seems to fix things, but I don't completely understand the details
-            let vert = triangle[2];
-            face_triangles.push(vert);
-            face_normals.push(normal);
-            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
-
-            let vert = triangle[1];
-            face_triangles.push(vert);
-            face_normals.push(normal);
-            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
-
-            let vert = triangle[0];
-            face_triangles.push(vert);
-            face_normals.push(normal);
-            face_uvs.push(calc_uv(&texture_info, vert, tex_width, tex_height));
-
-            triangle[1] = triangle[2];
-            triangle_vert = 2;
+        // TODO: I don't know if this is the best method to find the leaf?
+        let leaf = map.bsp.leaf_at(pos);
+        let leaf2 = &*leaf;
+        println!("Leaf: {:?}", leaf2);
+        if let Some(vis_set) = leaf.visible_set() {
+            visible_sets.push(vis_set);
         }
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, face_triangles);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, face_normals);
-    // panic!();
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, face_uvs);
-    // TODO: lightmaps with UV_1?
-
-    // Create the material
-    let material = StandardMaterial {
-        // base_color: color,
-        base_color_texture: texture.clone(),
-        // alpha_mode: AlphaMode::Blend,
-        // unlit: true,
-        // emissive_texture: texture,
-        // TODO: determine this properly
-        alpha_mode: if color.a() < 1.0 {
-            AlphaMode::Blend
-        } else {
-            AlphaMode::Opaque
-        },
-        // TODO: might be needed since source uses DX
-        // flip_normal_map_y
-
-        // unlit: true,
-        // metallic: 0.0,
-        // emissive: color,
-        // unlit: true,
-        // reflectance: 0.0,
-        ..Default::default()
-    };
-
-    FaceInfo {
-        mesh,
-        material,
-        transform: Transform::from_translation(offset),
-    }
-}
-
-/// Calculate the UV coordinates for the given vertex and texture.
-fn calc_uv(
-    texture_info: &vbsp::TextureInfo,
-    vertex: [f32; 3],
-    tex_width: f32,
-    tex_height: f32,
-) -> [f32; 2] {
-    // [xmul, ymul, zmul, offset]
-    let scale = texture_info.texture_scale;
-    let transform = texture_info.texture_transform;
-
-    // Undo the scaling
-    let vertex = [vertex[0] / SCALE, vertex[1] / SCALE, vertex[2] / SCALE];
-    // Convert to texture coordinates (y-down)
-    let vertex = tex_coord(vertex);
-
-    // Convert from z-up to y-up, and then to texture coordinates
-    let scale = tex_coord_4(rotate_4(scale));
-    let transform = tex_coord_4(rotate_4(transform));
-
-    // xmul * x + ymul * y + zmul * z + offset
-    let u = scale[0] * vertex[0] + scale[1] * vertex[1] + scale[2] * vertex[2] + scale[3];
-    let v = transform[0] * vertex[0]
-        + transform[1] * vertex[1]
-        + transform[2] * vertex[2]
-        + transform[3];
-
-    // Normalize by the texture size
-    let u = u / tex_width;
-    let v = v / tex_height;
-
-    [u, v]
-}
-
-fn create_displacement_mesh<'a>(
-    bsp: &'a vbsp::Bsp,
-    face: vbsp::Handle<'a, vbsp::Face>,
-    disp: vbsp::Handle<'a, DisplacementInfo>,
-    offset: Vec3,
-    color: Color,
-) -> FaceInfo {
-    let low_base = disp.start_position; // * SCALE;
-    let low_base = <[f32; 3]>::from(low_base);
-    // let low_base = rotate(low_base);
-
-    if face.num_edges != 4 {
-        panic!("Bad displacement!\n");
+    // TODO: will this run change detection immediately, or is bevy smart and only does that if it
+    // actually changed?
+    // We first have to set all the visibility to hidden
+    for (_, mut vis, _) in nodes.iter_mut() {
+        *vis = Visibility::Hidden;
     }
 
-    let mut corner_verts = [[0.0, 0.0, 0.0]; 4];
-    let mut base_i = None;
-    let mut base_dist = std::f32::INFINITY;
-    for (i, corner_vert) in corner_verts.iter_mut().enumerate() {
-        let surface_edge = bsp
-            .surface_edges
-            .get((face.first_edge + i as i32) as usize)
-            .unwrap();
-        let edge = bsp.edges.get(surface_edge.edge_index() as usize).unwrap();
-        let vertex_index = match surface_edge.direction() {
-            vbsp::EdgeDirection::FirstToLast => edge.start_index,
-            vbsp::EdgeDirection::LastToFirst => edge.end_index,
-        };
+    // for visible_leaf in visible_sets.into_iter().flatten() {
+    //     todo!()
+    // }
 
-        let vertex = bsp.vertices.get(vertex_index as usize).unwrap();
-        let vertex = <[f32; 3]>::from(vertex.position);
-        // let vertex = [vertex[0] * SCALE, vertex[1] * SCALE, vertex[2] * SCALE];
-        // let vertex = rotate(vertex);
-
-        *corner_vert = vertex;
-
-        let this_dist = (vertex[0] - low_base[0]).abs()
-            + (vertex[2] - low_base[2]).abs()
-            + (vertex[1] - low_base[1]).abs();
-        if this_dist < base_dist {
-            base_dist = this_dist;
-            base_i = Some(i);
-        }
-    }
-
-    let base_i = base_i.expect("Bad base in displacement");
-
-    let high_base = corner_verts[(base_i + 3) % 4];
-    let high_ray = corner_verts[(base_i + 2) % 4];
-    let high_ray = [
-        high_ray[0] - high_base[0],
-        high_ray[1] - high_base[1],
-        high_ray[2] - high_base[2],
-    ];
-    let low_ray = corner_verts[(base_i + 1) % 4];
-    let low_ray = [
-        low_ray[0] - low_base[0],
-        low_ray[1] - low_base[1],
-        low_ray[2] - low_base[2],
-    ];
-
-    let verts_wide = (2 << (disp.power - 1)) + 1;
-
-    let mut base_verts = vec![[0.0, 0.0, 0.0]; 289];
-    let mut base_alphas = vec![0.0; 289];
-
-    for y in 0..verts_wide {
-        let fy = y as f32 / (verts_wide as f32 - 1.0);
-
-        let mid_base = [
-            low_base[0] + low_ray[0] * fy,
-            low_base[1] + low_ray[1] * fy,
-            low_base[2] + low_ray[2] * fy,
-        ];
-        let mid_ray = [
-            high_base[0] + high_ray[0] * fy - mid_base[0],
-            high_base[1] + high_ray[1] * fy - mid_base[1],
-            high_base[2] + high_ray[2] * fy - mid_base[2],
-        ];
-
-        for x in 0..verts_wide {
-            let fx = x as f32 / (verts_wide as f32 - 1.0);
-            let i = x + y * verts_wide;
-
-            // TODO: use disp.displacement_vertices
-            let disp_vert = bsp
-                .displacement_vertices
-                .get((disp.displacement_vertex_start + i) as usize)
-                .unwrap();
-            let offset = <[f32; 3]>::from(disp_vert.vector);
-            let scale = disp_vert.distance;
-            let alpha = disp_vert.alpha;
-
-            base_verts[i as usize] = [
-                mid_base[0] + mid_ray[0] * fx + offset[0] * scale,
-                mid_base[1] + mid_ray[1] * fx + offset[1] * scale,
-                mid_base[2] + mid_ray[2] * fx + offset[2] * scale,
-            ];
-            base_alphas[i as usize] = alpha;
-        }
-    }
-
-    let mut tris = Vec::new();
-    let mut normals = Vec::new();
-
-    for y in 0..(verts_wide - 1) {
-        for x in 0..(verts_wide - 1) {
-            let i = x + y * verts_wide;
-
-            // TODO: Displacement don't work with the other rotate, why?
-            // They look fine with just swapping the z and y, but the normal mesh
-            // looked fine with that until I had to apply the texture.
-            let v1 = scale(rotate_s(base_verts[i as usize]));
-            let v2 = scale(rotate_s(base_verts[(i + 1) as usize]));
-            let v3 = scale(rotate_s(base_verts[(i + verts_wide) as usize]));
-            let v4 = scale(rotate_s(base_verts[(i + verts_wide + 1) as usize]));
-
-            if i % 2 != 0 {
-                let normal = find_normal(v1, v3, v2);
-                // let color = Color::rgb(tex_r1, tex_g1, tex_b1);
-
-                tris.push(v1);
-                normals.push(normal);
-                tris.push(v3);
-                normals.push(normal);
-                tris.push(v2);
-                normals.push(normal);
-
-                let normal = find_normal(v2, v3, v4);
-
-                tris.push(v2);
-                normals.push(normal);
-                tris.push(v3);
-                normals.push(normal);
-                tris.push(v4);
-                normals.push(normal);
-            } else {
-                let normal = find_normal(v1, v3, v4);
-
-                tris.push(v1);
-                normals.push(normal);
-                tris.push(v3);
-                normals.push(normal);
-                tris.push(v4);
-                normals.push(normal);
-
-                let normal = find_normal(v1, v4, v2);
-
-                tris.push(v2);
-                normals.push(normal);
-                tris.push(v1);
-                normals.push(normal);
-                tris.push(v4);
-                normals.push(normal);
-            }
-        }
-    }
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, tris);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-
-    let material: StandardMaterial = color.into();
-
-    FaceInfo {
-        mesh,
-        material,
-        transform: Transform::from_translation(offset),
-    }
-}
-
-fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-    let u = [b[0] - c[0], b[1] - c[1], b[2] - c[2]];
-    let v = [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
-
-    let norm = [
-        u[1] * v[2] - u[2] * v[1],
-        u[2] * v[0] - u[0] * v[2],
-        u[0] * v[1] - u[1] * v[0],
-    ];
-
-    let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
-
-    [norm[0] / len, norm[1] / len, norm[2] / len]
-}
-
-// fn pick_color(name: &str, x: f32) -> u32 {
-//     // TODO: more colors
-//     let col = 77550;
-
-//     col
-// }
-
-/// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
-fn rotate(v: [f32; 3]) -> [f32; 3] {
-    [v[0], v[2], -v[1]]
-}
-fn rotate_s(v: [f32; 3]) -> [f32; 3] {
-    [v[0], v[2], v[1]]
-}
-/// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
-fn rotate_4(v: [f32; 4]) -> [f32; 4] {
-    [v[0], v[2], -v[1], v[3]]
-}
-fn scale(v: [f32; 3]) -> [f32; 3] {
-    [v[0] * SCALE, v[1] * SCALE, v[2] * SCALE]
-}
-/// Convert a y-up (bevy) vector to a tex coordinate vector
-fn tex_coord(v: [f32; 3]) -> [f32; 3] {
-    [v[0], -v[1], v[2]]
-}
-fn tex_coord_4(v: [f32; 4]) -> [f32; 4] {
-    [v[0], -v[1], v[2], v[3]]
+    // // Now set any entries that are visible to visible
+    // for cluster_index in 0..visible_clusters.len() {
+    //     let visible = visible_clusters[cluster_index];
+    //     if visible {
+    //         let leaves = map.bsp
+    //     }
+    // }
 }
