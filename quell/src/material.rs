@@ -5,7 +5,7 @@ use std::{
 };
 
 use bevy::{
-    prelude::{Assets, Color, Image},
+    prelude::{Assets, Image},
     render::{
         render_resource::{
             Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,

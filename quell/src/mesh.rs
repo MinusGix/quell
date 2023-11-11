@@ -7,7 +7,8 @@ use vbsp::{Bsp, DisplacementInfo};
 
 use crate::{data::LoadedTextures, map::GameMap};
 
-pub const SCALE: f32 = 0.1;
+// pub const SCALE: f32 = 0.1;
+pub const SCALE: f32 = 1.0 / (1.905 * 100.0);
 
 // TODO: use a trait or something to build the meshes so that this can be used by other libraries
 // if desired.
@@ -225,7 +226,7 @@ fn create_basic_map_mesh<'a>(
 
         let vertex = bsp.vertices.get(vertex_index as usize).unwrap();
         let vertex = <[f32; 3]>::from(vertex.position);
-        let vertex = [vertex[0] * SCALE, vertex[1] * SCALE, vertex[2] * SCALE];
+        let vertex = scale(vertex);
         let vertex = rotate(vertex);
 
         triangle[triangle_vert] = vertex;

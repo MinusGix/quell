@@ -1,5 +1,9 @@
 use std::{error::Error, fs::File, io::BufWriter, io::Write, path::Path, time::Duration};
 
+use bevy::prelude::Transform;
+
+use crate::mesh::{unrotate, unscale};
+
 pub struct MeanCalc {
     mean: f32,
     count: u32,
@@ -91,4 +95,15 @@ pub fn vec_to_csv(data: &[f32], file_path: impl AsRef<Path>) -> Result<(), Box<d
     }
 
     Ok(())
+}
+
+pub fn transform_to_vbsp(transform: Transform) -> vbsp::Vector {
+    let p = transform.translation.to_array();
+    // let p = unscale(p);
+    let p = unrotate(p);
+    vbsp::Vector {
+        x: p[0],
+        y: p[1],
+        z: p[2],
+    }
 }
