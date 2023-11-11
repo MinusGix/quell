@@ -7,7 +7,7 @@ use quell::{
     data::{GameId, LoadedTextures, VpkState},
     map::GameMap,
     material::load_materials,
-    mesh::{construct_meshes, FaceInfo},
+    mesh::{construct_meshes, scale, unrotate, unscale, FaceInfo},
 };
 
 use rayon::prelude::ParallelIterator;
@@ -56,11 +56,9 @@ fn main() {
         .run();
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct BSPHeadNode(pub i32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct LeafFaceId(pub u16);
+/// The index of a face in the BSP
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub struct FaceIndex(pub usize);
 
 fn setup(
     mut commands: Commands,
@@ -128,11 +126,10 @@ fn setup(
     //     ..Default::default()
     // });
 
+    let map_path = "ex/ctf_2fort.bsp";
+    // let map_path = "ex/tf/tf/maps/test.bsp";
+    let mut map = GameMap::from_path(map_path).unwrap();
     {
-        let map_path = "ex/ctf_2fort.bsp";
-        // let map_path = "ex/tf/tf/maps/test.bsp";
-        let map = GameMap::from_path(map_path).unwrap();
-
         load_materials(&vpk, &mut loaded_textures, &mut images, &map).unwrap();
 
         let start_time = std::time::Instant::now();
@@ -144,47 +141,76 @@ fn setup(
 
         println!("Model count: #{}", map.bsp.models.len());
 
-        let cmds = construct_meshes(&loaded_textures, &map)
-            .collect::<Vec<_>>()
+        let faces = construct_meshes(&loaded_textures, &map).collect::<Vec<_>>();
+        let materials = &mut materials;
+        let meshes = &mut meshes;
+        let cmds = faces
             .into_iter()
             .map(move |face_info| {
                 let FaceInfo {
                     mesh,
                     material,
                     transform,
+                    face_i,
                 } = face_info;
                 let mesh = meshes.add(mesh);
                 let material = materials.add(material);
 
-                (PbrBundle {
-                    mesh,
-                    material,
-                    transform,
-                    ..Default::default()
-                },)
+                (
+                    PbrBundle {
+                        mesh,
+                        material,
+                        transform,
+                        ..Default::default()
+                    },
+                    FaceIndex(face_i),
+                )
             })
             // We have to collect a second time because spawn_batch requires a 'static
             // iterator
             .collect::<Vec<_>>();
 
-        commands.spawn_batch(cmds);
+        // commands.spawn_batch(cmds);
+        for (pbr, face_i) in cmds {
+            let ent = commands.spawn((pbr, face_i));
+            map.faces.insert(face_i.0, ent.id());
+        }
 
         let end_time = std::time::Instant::now();
 
         println!("Loaded map in {:?}", end_time - start_time);
-
-        commands.insert_resource(map);
     }
+    // spawn_leaf_boundaries(&mut commands, &map, &mut *meshes, &mut *materials);
+
+    commands.insert_resource(map);
 }
 
 // TODO: possibly we should group faces under one parent node so we can hide them all at once?
 fn update_visibility(
-    commands: Commands,
-    meshes: Res<Assets<Mesh>>,
+    // commands: Commands,
+    // meshes: Res<Assets<Mesh>>,
     map: Res<GameMap>,
-    mut nodes: Query<(&BSPHeadNode, &mut Visibility, &Transform)>,
+    mut nodes: Query<(&FaceIndex, &mut Visibility, &Transform)>,
     cameras: Query<(&UnrealCameraController, &Transform)>,
 ) {
+    // It seems like if we go to the blu spawn then we get in proper clusters, is everything
+    // shifted badly somehow?? Or are positions supposed to be relative to some origin?
+    // for (_camera, transform) in cameras.iter() {
+    //     let pos = transform.translation.to_array();
+    //     let pos = unrotate(pos);
+    //     let pos = unscale(pos);
+    //     let pos = vbsp::Vector {
+    //         x: pos[0],
+    //         y: pos[1],
+    //         z: pos[2],
+    //     };
+
+    //     let leaf = map.bsp.leaf_at(pos);
+    //     if leaf.cluster != -1 {
+    //         println!("Camera: {transform:?} -> {pos:?} -> {:?}", leaf.cluster);
+    //     }
+    // }
+
     // The way visibility works in BSP is that each point is in exactly one leaf (which are convex,
     // but whatever).
     // Enterable leaves (visleaves) gets a 'cluster number'.
@@ -194,90 +220,161 @@ fn update_visibility(
     // TODO: bsp article mentions that there is only ever one leaf per cluster in old source maps,
     // but some CS:GO maps have multiple leaves in the same cluster, do we support that?
 
-    // // We iterate over all the entities with a BSP head node (currently faces) to get the node that
-    // // they are at (since BSP is a tree, the leaves are somewhere below, I believe?)
-    // for (head_node, visibility, transform) in head_nodes.iter() {
-    //     // let node = map.bsp.node(head_node.0).unwrap();
-    //     let pos = transform.translation;
-    //     let pos = vbsp::Vector {
-    //         x: pos.x,
-    //         y: pos.y,
-    //         z: pos.z,
-    //     };
-    //     // TODO: I don't know if this is the best method
-    //     let leaf = map.bsp.leaf_at(pos);
+    // FIXME: This code is broken!
+    // It works in my very simple test map where everything is seemingly visible from everywhere
+    // else, but it does not work in ctf_2fort at all!
+    // It seems like it basically always gets a leaf with -1 cluster, which is nothing, so it
+    // doesn't show anything.
+    // If we zoom out very far then we might get something, but I expect that it is going outside
+    // the skybox, and at times it crashed due to the bitvec.set in vbsp being out of bounds.
+    // (though I've added a check in that code).
+    //
+    // I'm unsure what the underlying issue is. I've glanced at alternate implementations and they
+    // seem like mine.
+    // The parsing code in vbsp seems fine for visdata, and swapping it to reading pvs/pas
+    // separately did not help.
+    // Rewriting the leaf at function and trying to rewrite the visdata decompression didn't help
+    // either.
+    //
+    // It is possible that I'm getting the position of the camera incorrectly, but I'm not sure how
+    // it would be so.
 
-    //     // todo
-    // }
-
-    // TODO: we can probably compute this more efficiently by just iterating over the visible
-    // clusters in the visdata directly, and thus avoid any allocs
-    // Though the obvious way of iterating that I can see has the issue that we'd have to set
-    // visibility to hidden for all of them, and then undo that, but unless they do something fancy
-    // that should be cheap & fine?
-    // let mut visible_clusters = BitVec::new();
-
-    // // Compute the visible clusters from the camera locations.
-    // // We have to allow separate cameras, because they could be in different locations.
+    // // TODO: use a smallvec
+    // let mut visible_sets = Vec::with_capacity(2);
     // for (_camera, transform) in cameras.iter() {
-    //     let pos = transform.translation;
+    //     let pos = transform.translation.to_array();
+    //     // let pos = unrotate(pos);
+    //     // let pos = unscale(pos);
     //     let pos = vbsp::Vector {
-    //         x: pos.x,
-    //         y: pos.y,
-    //         z: pos.z,
+    //         x: pos[0],
+    //         y: pos[1],
+    //         z: pos[2],
     //     };
     //     // TODO: I don't know if this is the best method to find the leaf?
     //     let leaf = map.bsp.leaf_at(pos);
-    //     let cluster = leaf.cluster;
+    //     println!("Camera: {transform:?} -> {pos:?} -> {:?}", leaf.cluster);
 
-    //     let mut vis = map.bsp.vis_data.visible_clusters(cluster);
-    //     if visible_clusters.is_empty() {
-    //         visible_clusters = vis;
-    //     } else {
-    //         // First we have to ensure their length matches unfortunately
-    //         if visible_clusters.len() < vis.len() {
-    //             visible_clusters.resize(vis.len(), false);
-    //         } else if visible_clusters.len() > vis.len() {
-    //             vis.resize(visible_clusters.len(), false);
-    //         }
-    //         // Combine it with visible clusters
-    //         visible_clusters.bit_or_assign(&vis);
+    //     if let Some(vis_set) = leaf.visible_set() {
+    //         visible_sets.push(vis_set);
     //     }
     // }
 
-    let mut visible_sets = Vec::with_capacity(2);
-    for (_camera, transform) in cameras.iter() {
-        let pos = transform.translation;
-        let pos = vbsp::Vector {
-            x: pos.x,
-            y: pos.y,
-            z: pos.z,
-        };
-        // TODO: I don't know if this is the best method to find the leaf?
-        let leaf = map.bsp.leaf_at(pos);
-        let leaf2 = &*leaf;
-        println!("Leaf: {:?}", leaf2);
-        if let Some(vis_set) = leaf.visible_set() {
-            visible_sets.push(vis_set);
-        }
-    }
+    // // let zero_leaf = map.bsp.leaf_at(vbsp::Vector {
+    // //     x: 0.0,
+    // //     y: 0.0,
+    // //     z: 0.0,
+    // // });
+    // // if let Some(vis_set) = zero_leaf.visible_set() {
+    // //     visible_sets.push(vis_set);
+    // // }
+    // // let zero_leaf = &*zero_leaf;
+    // // println!("Zero leaf: {zero_leaf:?}");
 
-    // TODO: will this run change detection immediately, or is bevy smart and only does that if it
-    // actually changed?
-    // We first have to set all the visibility to hidden
-    for (_, mut vis, _) in nodes.iter_mut() {
-        *vis = Visibility::Hidden;
-    }
-
-    // for visible_leaf in visible_sets.into_iter().flatten() {
-    //     todo!()
+    // // TODO: will this run change detection immediately, or is bevy smart and only does that if it
+    // // actually changed?
+    // // We first have to set all the visibility to hidden
+    // for (_, mut vis, _) in nodes.iter_mut() {
+    //     *vis = Visibility::Hidden;
     // }
 
-    // // Now set any entries that are visible to visible
-    // for cluster_index in 0..visible_clusters.len() {
-    //     let visible = visible_clusters[cluster_index];
-    //     if visible {
-    //         let leaves = map.bsp
+    // let mut visible_count = 0;
+    // let mut face_count = 0;
+    // let mut skipped_faces = 0;
+    // for visible_leaf in visible_sets.into_iter().flatten() {
+    //     for (face_i, _face) in visible_leaf.faces_enumerate() {
+    //         face_count += 1;
+    //         // println!("Face i: {face_i}");
+    //         // println!("Faces: {:?}", map.faces);
+    //         let Some(entity) = map.faces.get(&face_i) else {
+    //             // That we don't have an index implies that there's faces we don't create..
+    //             // I at first thought this must be displacements (which would also fit!) but it
+    //             // even happens for my small test map.
+    //             skipped_faces += 1;
+    //             continue;
+    //         };
+    //         if let Ok((_, mut vis, _)) = nodes.get_mut(*entity) {
+    //             *vis = Visibility::Visible;
+    //             visible_count += 1;
+    //         }
+    //     }
+    // }
+    // println!(
+    //     "Visible faces: {visible_count}; face count: {face_count}; skipped faces: {skipped_faces}",
+    // );
+
+    // if visible_count == 0 {
+    //     // No visible faces, so they're probably outside the map, so we simply add the entire map
+    //     // This should typically not happen during normal gameplay, and if it does happen remotely
+    //     // often then we should try methods to avoid it.
+    //     // (ex: like if cameras for mirrors end up being considered inside the wall then we should
+    //     // try fixing that, via something smarter)
+
+    //     for (_, mut vis, _) in nodes.iter_mut() {
+    //         *vis = Visibility::Visible;
     //     }
     // }
 }
+
+// TODO: This could be useful if we made it update the color of the leaf boundaries based on the
+// distance of the camera. How efficiently can we recreate materials with different colors?
+// const LEAF_MIN_ALPHA: f32 = 0.05;
+// const LEAF_MAX_ALPHA: f32 = 0.4;
+
+// #[derive(Debug, Clone, Component)]
+// pub struct LeafBoundary;
+
+// fn update_leaf_boundaries(leaves: Query<(&LeafBoundary, &mut Handle<StandardMaterial>, camera)>) {
+
+// }
+
+// fn spawn_leaf_boundaries(
+//     commands: &mut Commands,
+//     map: &GameMap,
+//     meshes: &mut Assets<Mesh>,
+//     materials: &mut Assets<StandardMaterial>,
+// ) {
+//     for leaf in map.bsp.leaves.iter() {
+//         let mins = leaf.mins;
+//         let maxs = leaf.maxs;
+
+//         let mins = [mins[0] as f32, mins[1] as f32, mins[2] as f32];
+//         let maxs = [maxs[0] as f32, maxs[1] as f32, maxs[2] as f32];
+
+//         // TODO: possibly rotate
+
+//         let mins = Vec3::from_array(mins);
+//         let maxs = Vec3::from_array(maxs);
+//         let center = (mins + maxs) / 2.0;
+
+//         let mesh = meshes.add(Mesh::from(shape::Box {
+//             min_x: mins.x,
+//             min_y: mins.y,
+//             min_z: mins.z,
+//             max_x: maxs.x,
+//             max_y: maxs.y,
+//             max_z: maxs.z,
+//         }));
+//         // We have to create them in the interval [0, 1]
+//         let random_color = Color::rgba(
+//             rand::random::<f32>(),
+//             rand::random::<f32>(),
+//             rand::random::<f32>(),
+//             0.05,
+//         );
+//         let material = materials.add(StandardMaterial {
+//             base_color: random_color,
+//             alpha_mode: AlphaMode::Blend,
+//             ..Default::default()
+//         });
+
+//         commands.spawn((
+//             PbrBundle {
+//                 mesh,
+//                 material,
+//                 transform: Transform::from_translation(center),
+//                 ..Default::default()
+//             },
+//             LeafBoundary,
+//         ));
+//     }
+// }

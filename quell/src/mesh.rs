@@ -2,7 +2,7 @@ use bevy::{
     prelude::{AlphaMode, Color, Handle, Image, Mesh, StandardMaterial, Transform, Vec3},
     render::render_resource::PrimitiveTopology,
 };
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use vbsp::{Bsp, DisplacementInfo};
 
 use crate::{data::LoadedTextures, map::GameMap};
@@ -16,6 +16,14 @@ pub fn construct_meshes<'c>(
     loaded_textures: &'c LoadedTextures,
     map: &'c GameMap,
 ) -> impl ParallelIterator<Item = FaceInfo> + 'c {
+    // I had some trouble determining what the right way to construct the meshes early on is for
+    // the map.
+    // At first I did this, models -> faces
+    // But then I was needing the cluster for the leaf, and tried crawling down the tree and
+    // rendering
+    // but as far as I can tell, the leaves aren't guaranteed to uniquely references faces?
+    // So, I continue with this method, hoping it is correct.
+
     map.bsp
         .models
         .par_iter()
@@ -23,17 +31,23 @@ pub fn construct_meshes<'c>(
             let start = m.first_face as usize;
             let end = start + m.face_count as usize;
 
-            map.bsp.faces[start..end].par_iter().map(move |x| (m, x))
+            map.bsp.faces[start..end]
+                .par_iter()
+                .enumerate()
+                .map(move |(i, x)| (m, i, x))
         })
-        .filter_map(move |(m, face)| {
-            // TODO: do coordinates need to be rotated?
+        .filter_map(move |(m, face_i, face)| {
+            // TODO: do these coordinates need to be rotated?
             let origin = Vec3::new(m.origin.x, m.origin.y, m.origin.z);
 
             let face = vbsp::Handle::new(&map.bsp, face);
             let res = construct_face_cmd(loaded_textures, map, face, origin).transpose()?;
             // TODO: use tracing
             match res {
-                Ok(face_info) => Some(face_info),
+                Ok(mut face_info) => {
+                    face_info.face_i = face_i;
+                    Some(face_info)
+                }
                 Err(err) => {
                     eprintln!("Failed to construct face: {:?}", err);
                     None
@@ -42,11 +56,57 @@ pub fn construct_meshes<'c>(
         })
 }
 
+// pub fn construct_meshes<'c>(
+//     loaded_textures: &'c LoadedTextures,
+//     map: &'c GameMap,
+// ) -> impl ParallelIterator<Item = FaceInfo> + 'c {
+//     // Rather than crawling the node tree like typical, we just don't do that and iterate over all
+//     // the nodes in the map. This lets us just process them entirely in parallel.
+//     // However, this does make it marginally harder to mape certain things back to their parents,
+//     // but I'm not sure we want to replicate the bsp tree in the bevy's ECS anyway.
+
+//     map.bsp
+//         .leaves
+//         .par_iter()
+//         .flat_map(|leaf| {
+//             let start = leaf.first_leaf_face as usize;
+//             let end = start + leaf.leaf_face_count as usize;
+
+//             map.bsp.leaf_faces[start..end]
+//                 .par_iter()
+//                 .map(|x| &map.bsp.faces[usize::from(x.face)])
+//                 .map(move |x| (leaf, x))
+//         })
+//         .filter_map(move |(leaf, face)| {
+//             // TODO: do we need to use the `Model` origin? ctf_2fort had all of them as 0,0,0..
+
+//             // Cluster identifies which part of the map it is in for easy visibility computation
+//             let cluster = leaf.cluster;
+
+//             let origin = Vec3::ZERO;
+
+//             let face = vbsp::Handle::new(&map.bsp, face);
+//             let res = construct_face_cmd(loaded_textures, map, face, origin).transpose()?;
+//             // TODO: use tracing
+//             match res {
+//                 Ok(mut face_info) => {
+//                     face_info.cluster = cluster;
+//                     Some(face_info)
+//                 }
+//                 Err(err) => {
+//                     eprintln!("Failed to construct face: {:?}", err);
+//                     None
+//                 }
+//             }
+//         })
+// }
+
 #[derive(Debug, Clone)]
 pub struct FaceInfo {
     pub mesh: Mesh,
     pub material: StandardMaterial,
     pub transform: Transform,
+    pub face_i: usize,
 }
 
 /// Construct the information needed to create a face.
@@ -229,6 +289,8 @@ fn create_basic_map_mesh<'a>(
         mesh,
         material,
         transform: Transform::from_translation(offset),
+        // TODO: do something better than letting the caller set this?
+        face_i: 0,
     }
 }
 
@@ -434,6 +496,8 @@ fn create_displacement_mesh<'a>(
         mesh,
         material,
         transform: Transform::from_translation(offset),
+        // TODO: do something better than letting the caller set this?
+        face_i: 0,
     }
 }
 
@@ -460,23 +524,34 @@ fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 // }
 
 /// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
-fn rotate(v: [f32; 3]) -> [f32; 3] {
+pub fn rotate(v: [f32; 3]) -> [f32; 3] {
     [v[0], v[2], -v[1]]
 }
-fn rotate_s(v: [f32; 3]) -> [f32; 3] {
+pub fn rotate_s(v: [f32; 3]) -> [f32; 3] {
     [v[0], v[2], v[1]]
 }
 /// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
-fn rotate_4(v: [f32; 4]) -> [f32; 4] {
+pub fn rotate_4(v: [f32; 4]) -> [f32; 4] {
     [v[0], v[2], -v[1], v[3]]
 }
-fn scale(v: [f32; 3]) -> [f32; 3] {
+
+pub fn unrotate(v: [f32; 3]) -> [f32; 3] {
+    [v[0], -v[2], v[1]]
+}
+pub fn unrotate_s(v: [f32; 3]) -> [f32; 3] {
+    [v[0], v[2], v[1]]
+}
+
+pub fn scale(v: [f32; 3]) -> [f32; 3] {
     [v[0] * SCALE, v[1] * SCALE, v[2] * SCALE]
 }
+pub fn unscale(v: [f32; 3]) -> [f32; 3] {
+    [v[0] / SCALE, v[1] / SCALE, v[2] / SCALE]
+}
 /// Convert a y-up (bevy) vector to a tex coordinate vector
-fn tex_coord(v: [f32; 3]) -> [f32; 3] {
+pub(crate) fn tex_coord(v: [f32; 3]) -> [f32; 3] {
     [v[0], -v[1], v[2]]
 }
-fn tex_coord_4(v: [f32; 4]) -> [f32; 4] {
+pub(crate) fn tex_coord_4(v: [f32; 4]) -> [f32; 4] {
     [v[0], -v[1], v[2], v[3]]
 }

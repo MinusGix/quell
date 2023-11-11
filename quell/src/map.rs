@@ -1,6 +1,9 @@
 use std::{borrow::Cow, path::Path};
 
-use bevy::prelude::Resource;
+use bevy::{
+    prelude::{Entity, Resource},
+    utils::HashMap,
+};
 use vbsp::Bsp;
 
 use crate::data::LSrc;
@@ -8,13 +11,19 @@ use crate::data::LSrc;
 #[derive(Debug, Resource)]
 pub struct GameMap {
     pub bsp: Bsp,
+    /// Keeps track of the mapping between the face index in the current bsp map, and the face
+    /// entities.
+    pub faces: HashMap<usize, Entity>,
 }
 impl GameMap {
     pub fn from_path(path: impl AsRef<Path>) -> eyre::Result<GameMap> {
         let data = std::fs::read(path)?;
         let bsp = Bsp::read(&data)?;
 
-        Ok(GameMap { bsp })
+        Ok(GameMap {
+            bsp,
+            faces: HashMap::new(),
+        })
     }
 
     pub fn find_vmt(&self, name: &str) -> Option<(Vec<u8>, LSrc)> {
