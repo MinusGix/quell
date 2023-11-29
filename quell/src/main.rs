@@ -66,8 +66,8 @@ fn main() {
         .add_plugins(OutlinePlugin)
         .add_systems(Startup, setup)
         // Not sure if this should be preupdate or not
-        .add_systems(PreUpdate, update_visibility)
-        .add_systems(Update, leafvis_frame)
+        // .add_systems(PreUpdate, update_visibility)
+        // .add_systems(Update, leafvis_frame)
         .run();
 }
 
@@ -86,8 +86,6 @@ fn setup(
     vpk: Res<VpkState>,
     mut loaded_textures: ResMut<LoadedTextures>,
 ) {
-    println!("Setup");
-
     loaded_textures.missing_texture = images.add(quell::material::missing_texture());
 
     gizmo_conf.enabled = true;
@@ -119,7 +117,7 @@ fn setup(
                 // keyboard_mvmt_sensitivity: 40.0,
                 ..Default::default()
             },
-            Vec3::new(-10.0, 5.0, 5.0),
+            Vec3::new(-1.0, 3.0, 2.0),
             // Vec3::new(0., 0., 0.),
             // opposite direction
             Vec3::new(-35., 15., -10.),
@@ -311,7 +309,7 @@ fn update_visibility(
 
     // The way visibility works in BSP is that each point is in exactly one leaf (which are convex,
     // but whatever).
-    // Enterable leaves (visleaves) gets a 'cluster number'.
+    // Enterable leaves (visleaves) get a 'cluster number'.
     // Essentially the cluster number is just an id for areas you can be in, which determines what
     // other areas are visible, thus saving work at runtime.
 
@@ -327,6 +325,10 @@ fn update_visibility(
     // the skybox, and at times it crashed due to the bitvec.set in vbsp being out of bounds.
     // (though I've added a check in that code).
     //
+    // Later addendum: Various changes I've tried having marginally improved the situation, but it
+    // still puts them in seemingly the wrong spot on the map. I'm thinking that maybe some sort of
+    // transformation is being done wrong, but I'm not sure what.
+    //
     // I'm unsure what the underlying issue is. I've glanced at alternate implementations and they
     // seem like mine.
     // The parsing code in vbsp seems fine for visdata, and swapping it to reading pvs/pas
@@ -337,18 +339,18 @@ fn update_visibility(
     // It is possible that I'm getting the position of the camera incorrectly, but I'm not sure how
     // it would be so.
 
-    // TODO: use a smallvec
-    let mut visible_sets = Vec::with_capacity(2);
-    for (_camera, transform) in cameras.iter() {
-        let pos = transform_to_vbsp(*transform);
-        // TODO: I don't know if this is the best method to find the leaf?
-        let leaf = map.bsp.leaf_at(pos);
-        // println!("Camera: {transform:?} -> {pos:?} -> {:?}", leaf.cluster);
+    // // TODO: use a smallvec
+    // let mut visible_sets = Vec::with_capacity(2);
+    // for (_camera, transform) in cameras.iter() {
+    //     let pos = transform_to_vbsp(*transform);
+    //     // TODO: I don't know if this is the best method to find the leaf?
+    //     let leaf = map.bsp.leaf_at(pos);
+    //     // println!("Camera: {transform:?} -> {pos:?} -> {:?}", leaf.cluster);
 
-        if let Some(vis_set) = leaf.visible_set() {
-            visible_sets.push(vis_set);
-        }
-    }
+    //     if let Some(vis_set) = leaf.visible_set() {
+    //         visible_sets.push(vis_set);
+    //     }
+    // }
 
     // // let zero_leaf = map.bsp.leaf_at(vbsp::Vector {
     // //     x: 0.0,
@@ -364,46 +366,46 @@ fn update_visibility(
     // // TODO: will this run change detection immediately, or is bevy smart and only does that if it
     // // actually changed?
     // We first have to set all the visibility to hidden
-    for (_, mut vis, _) in nodes.iter_mut() {
-        *vis = Visibility::Hidden;
-    }
+    // for (_, mut vis, _) in nodes.iter_mut() {
+    //     *vis = Visibility::Hidden;
+    // }
 
-    let mut visible_count = 0;
-    let mut face_count = 0;
-    let mut skipped_faces = 0;
-    for visible_leaf in visible_sets.into_iter().flatten() {
-        for (face_i, _face) in visible_leaf.faces_enumerate() {
-            face_count += 1;
-            // println!("Face i: {face_i}");
-            // println!("Faces: {:?}", map.faces);
-            let Some(entity) = map.faces.get(&face_i) else {
-                // That we don't have an index implies that there's faces we don't create..
-                // I at first thought this must be displacements (which would also fit!) but it
-                // even happens for my small test map.
-                skipped_faces += 1;
-                continue;
-            };
-            if let Ok((_, mut vis, _)) = nodes.get_mut(*entity) {
-                *vis = Visibility::Visible;
-                visible_count += 1;
-            }
-        }
-    }
-    println!(
-        "Visible faces: {visible_count}; face count: {face_count}; skipped faces: {skipped_faces}",
-    );
+    // let mut visible_count = 0;
+    // let mut face_count = 0;
+    // let mut skipped_faces = 0;
+    // for visible_leaf in visible_sets.into_iter().flatten() {
+    //     for (face_i, _face) in visible_leaf.faces_enumerate() {
+    //         face_count += 1;
+    //         // println!("Face i: {face_i}");
+    //         // println!("Faces: {:?}", map.faces);
+    //         let Some(entity) = map.faces.get(&face_i) else {
+    //             // That we don't have an index implies that there's faces we don't create..
+    //             // I at first thought this must be displacements (which would also fit!) but it
+    //             // even happens for my small test map.
+    //             skipped_faces += 1;
+    //             continue;
+    //         };
+    //         if let Ok((_, mut vis, _)) = nodes.get_mut(*entity) {
+    //             *vis = Visibility::Visible;
+    //             visible_count += 1;
+    //         }
+    //     }
+    // }
+    // println!(
+    //     "Visible faces: {visible_count}; face count: {face_count}; skipped faces: {skipped_faces}",
+    // );
 
-    if visible_count == 0 {
-        // No visible faces, so they're probably outside the map, so we simply add the entire map
-        // This should typically not happen during normal gameplay, and if it does happen remotely
-        // often then we should try methods to avoid it.
-        // (ex: like if cameras for mirrors end up being considered inside the wall then we should
-        // try fixing that, via something smarter)
+    // if visible_count == 0 {
+    //     // No visible faces, so they're probably outside the map, so we simply add the entire map
+    //     // This should typically not happen during normal gameplay, and if it does happen remotely
+    //     // often then we should try methods to avoid it.
+    //     // (ex: like if cameras for mirrors end up being considered inside the wall then we should
+    //     // try fixing that, via something smarter)
 
-        for (_, mut vis, _) in nodes.iter_mut() {
-            *vis = Visibility::Visible;
-        }
-    }
+    //     for (_, mut vis, _) in nodes.iter_mut() {
+    //         *vis = Visibility::Visible;
+    //     }
+    // }
 }
 
 // TODO: This could be useful if we made it update the color of the leaf boundaries based on the
@@ -509,10 +511,10 @@ fn leafvis_frame(
 
     for (camera, transform) in cameras.iter() {
         let tra = transform.translation;
-        println!("Camera: {tra:?}");
+        // println!("Camera: {tra:?}");
     }
 
-    println!("Leaf count: {}", leaves.len());
+    // println!("Leaf count: {}", leaves.len());
     for leaf in leaves {
         // For each leaf we will use its min/max to create a wireframe box.
 
