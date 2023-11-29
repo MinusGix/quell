@@ -1,4 +1,5 @@
 use bevy::prelude::Resource;
+use derivative::Derivative;
 
 use crate::cheats_all;
 
@@ -17,7 +18,8 @@ pub struct Config {
     pub render: RenderConfig,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Derivative, Clone)]
+#[derivative(Default)]
 pub struct RenderConfig {
     // TODO: does no_vis or lock_pvs need sv_cheats?
     /// `r_novis`
@@ -27,6 +29,12 @@ pub struct RenderConfig {
     /// Prevents PVS from being recalculated.
     pub lock_pvs: bool,
     pub mat: MatRenderConfig,
+
+    // engine specific configuration
+
+    // TODO: listen for when this changes
+    #[derivative(Default(value = "true"))]
+    pub draw_map: bool,
 }
 
 #[derive(Debug, Default, Clone)]

@@ -1,6 +1,9 @@
 #![feature(test)]
 
-use bevy::prelude::{Assets, Image};
+use bevy::{
+    pbr::StandardMaterial,
+    prelude::{Assets, Image},
+};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use quell::{
     data::{GameId, LoadedTextures, VpkState},
@@ -19,9 +22,16 @@ fn bench_load_materials(c: &mut Criterion) {
     c.bench_function("load-materials1", |b| {
         b.iter(|| {
             let mut images: Assets<Image> = Assets::default();
+            let mut materials: Assets<StandardMaterial> = Assets::default();
             let mut loaded_textures = LoadedTextures::default();
 
-            let res = load_materials(&vpk, &mut loaded_textures, &mut images, &map);
+            let res = load_materials(
+                &vpk,
+                &mut loaded_textures,
+                &mut images,
+                &mut materials,
+                &map,
+            );
 
             black_box(res).unwrap();
 

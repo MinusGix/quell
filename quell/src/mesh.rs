@@ -16,7 +16,7 @@ pub const SCALE: f32 = 1.0 / (1.905 * 100.0);
 pub fn construct_meshes<'c>(
     loaded_textures: &'c LoadedTextures,
     map: &'c GameMap,
-) -> impl ParallelIterator<Item = FaceInfo> + 'c {
+) -> impl ParallelIterator<Item = FaceInfo<'c>> + 'c {
     // I had some trouble determining what the right way to construct the meshes early on is for
     // the map.
     // At first I did this, models -> faces
@@ -103,9 +103,9 @@ pub fn construct_meshes<'c>(
 // }
 
 #[derive(Debug, Clone)]
-pub struct FaceInfo {
+pub struct FaceInfo<'a> {
     pub mesh: Mesh,
-    pub material: StandardMaterial,
+    pub material_name: &'a str,
     pub transform: Transform,
     pub face_i: usize,
 }
@@ -113,12 +113,12 @@ pub struct FaceInfo {
 /// Construct the information needed to create a face.
 /// This currently expects any textures to already be loaded so that it can easily be used in
 /// parallel.
-fn construct_face_cmd(
+fn construct_face_cmd<'a>(
     loaded_textures: &LoadedTextures,
-    map: &GameMap,
-    face: vbsp::Handle<'_, vbsp::Face>,
+    map: &'a GameMap,
+    face: vbsp::Handle<'a, vbsp::Face>,
     offset: Vec3,
-) -> eyre::Result<Option<FaceInfo>> {
+) -> eyre::Result<Option<FaceInfo<'a>>> {
     let texture_info = face.texture();
     let texture_data = texture_info.texture_data();
 
@@ -192,7 +192,7 @@ fn create_basic_map_mesh<'a>(
     offset: Vec3,
     color: Color,
     texture: Option<Handle<Image>>,
-) -> FaceInfo {
+) -> FaceInfo<'a> {
     let texture_info = face.texture();
     let tex_width = texture_info.texture().width as f32;
     let tex_height = texture_info.texture().height as f32;
@@ -262,34 +262,10 @@ fn create_basic_map_mesh<'a>(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, face_uvs);
     // TODO: lightmaps with UV_1?
 
-    // Create the material
-    let material = StandardMaterial {
-        // base_color: color,
-        base_color_texture: texture.clone(),
-        // alpha_mode: AlphaMode::Blend,
-        // unlit: true,
-        // emissive_texture: texture,
-        // TODO: determine this properly
-        alpha_mode: if color.a() < 1.0 {
-            AlphaMode::Blend
-        } else {
-            AlphaMode::Opaque
-        },
-        // TODO: might be needed since source uses DX
-        // flip_normal_map_y
-
-        // unlit: true,
-        // metallic: 0.0,
-        // emissive: color,
-        // unlit: true,
-        // reflectance: 0.0,
-        ..Default::default()
-    };
-
     FaceInfo {
         mesh,
-        material,
         transform: Transform::from_translation(offset),
+        material_name: texture_info.name(),
         // TODO: do something better than letting the caller set this?
         face_i: 0,
     }
@@ -335,7 +311,7 @@ fn create_displacement_mesh<'a>(
     disp: vbsp::Handle<'a, DisplacementInfo>,
     offset: Vec3,
     color: Color,
-) -> FaceInfo {
+) -> FaceInfo<'a> {
     let low_base = disp.start_position; // * SCALE;
     let low_base = <[f32; 3]>::from(low_base);
     // let low_base = rotate(low_base);
@@ -491,12 +467,12 @@ fn create_displacement_mesh<'a>(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, tris);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 
-    let material: StandardMaterial = color.into();
+    // let material: StandardMaterial = color.into();
 
     FaceInfo {
         mesh,
-        material,
         transform: Transform::from_translation(offset),
+        material_name: face.texture().name(),
         // TODO: do something better than letting the caller set this?
         face_i: 0,
     }

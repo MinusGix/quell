@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, hash::Hash, path::Path, sync::Arc};
 
 use bevy::{
+    pbr::{AlphaMode, StandardMaterial},
     prelude::{Assets, Handle, Image, Resource},
     render::{
         render_resource::{
@@ -17,7 +18,7 @@ use vpk::{
     vpk::{Ext, ProbableKind},
 };
 
-use crate::map::GameMap;
+use crate::{map::GameMap, material::make_material};
 
 // TODO: We could preconvert vtf files to efficient formats, and then load those instead
 
@@ -132,6 +133,7 @@ pub struct LMaterial {
     /// Name of vtf
     pub image: Result<TextureName, TextureError>,
     pub vmt_src: LSrc,
+    pub mat: Handle<StandardMaterial>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -145,6 +147,7 @@ pub struct LImage {
 #[derive(Default, Clone, Resource)]
 pub struct LoadedTextures {
     pub missing_texture: Handle<Image>,
+    pub missing_material: Handle<StandardMaterial>,
     pub vmt: HashMap<MaterialName, LMaterial>,
     pub vtf: HashMap<TextureName, LImage>,
     /// Whether it should refuse to load any more materials/textures
@@ -162,6 +165,17 @@ impl LoadedTextures {
         None
     }
 
+    /// Find a material by its lowercase name
+    pub fn find_material_mut(&mut self, name: &str) -> Option<&mut LMaterial> {
+        for (vmt_name, material) in self.vmt.iter_mut() {
+            if name.eq_ignore_ascii_case(vmt_name) {
+                return Some(material);
+            }
+        }
+
+        None
+    }
+
     /// Find a texture by its lowercase name
     pub fn find_texture(&self, name: &str) -> Option<&LImage> {
         for (vtf_name, image) in self.vtf.iter() {
@@ -171,6 +185,12 @@ impl LoadedTextures {
         }
 
         None
+    }
+
+    pub fn find_material_handle(&self, name: &str) -> Option<Handle<StandardMaterial>> {
+        let lmaterial = self.find_material(name)?;
+
+        Some(lmaterial.mat.clone())
     }
 
     pub fn find_material_texture(&self, name: &str) -> Option<Result<Handle<Image>, TextureError>> {
@@ -202,10 +222,11 @@ impl LoadedTextures {
         vpk: &VpkState,
         map: Option<&GameMap>,
         images: &mut Assets<Image>,
+        materials: &mut Assets<StandardMaterial>,
         name: &str,
-    ) -> Result<Handle<Image>, MaterialError> {
-        if let Some(image) = self.find_material_texture(name) {
-            return Ok(image?);
+    ) -> Result<Handle<StandardMaterial>, MaterialError> {
+        if let Some(mat) = self.find_material_handle(name) {
+            return Ok(mat);
         }
 
         if self.frozen {
@@ -216,7 +237,7 @@ impl LoadedTextures {
         let info = construct_material_info(vpk, map, name)?;
         let name: MaterialName = name.to_lowercase().into();
 
-        self.load_material_with_info(vpk, map, images, name, info)
+        self.load_material_with_info(vpk, map, images, materials, name, info)
     }
 
     fn load_material_with_info(
@@ -224,15 +245,17 @@ impl LoadedTextures {
         vpk: &VpkState,
         map: Option<&GameMap>,
         images: &mut Assets<Image>,
+        materials: &mut Assets<StandardMaterial>,
         name: MaterialName,
         info: LoadingMaterialInfo,
-    ) -> Result<Handle<Image>, MaterialError> {
+    ) -> Result<Handle<StandardMaterial>, MaterialError> {
         if self.frozen {
             return Err(MaterialError::Frozen);
         }
 
         let lmaterial = LMaterial {
             image: Err(TextureError::NotLoaded),
+            mat: Handle::default(),
             vmt_src: info.vmt_src,
         };
 
@@ -244,10 +267,14 @@ impl LoadedTextures {
 
         self.load_texture(vpk, map, images, info.base_texture_name.clone())?;
 
-        let handle = self.vtf.get(&info.base_texture_name).unwrap().image.clone();
+        let image = self.vtf.get(&info.base_texture_name).unwrap().image.clone();
         self.vmt.get_mut(&name).unwrap().image = Ok(info.base_texture_name.clone());
 
-        Ok(handle)
+        let material = make_material(image);
+        let material = materials.add(material);
+        self.vmt.get_mut(&name).unwrap().mat = material.clone();
+
+        Ok(material)
     }
 
     /// Typically this should not be used.

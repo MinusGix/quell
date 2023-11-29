@@ -5,6 +5,8 @@ use std::{
 };
 
 use bevy::{
+    asset::Handle,
+    pbr::StandardMaterial,
     prelude::{Assets, Image},
     render::{
         render_resource::{
@@ -90,6 +92,7 @@ pub fn load_materials(
     vpk: &VpkState,
     loaded_textures: &mut LoadedTextures,
     images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
     map: &GameMap,
 ) -> eyre::Result<()> {
     let material_names = material_names(map);
@@ -180,6 +183,7 @@ pub fn load_materials(
 
     println!("L size: #{}", l.len());
 
+    let mut materials_to_load = Vec::with_capacity(iter.len());
     for (material_name, info, image) in iter {
         if let Some((image, img_src)) = image {
             loaded_textures.insert_texture_of(
@@ -191,11 +195,36 @@ pub fn load_materials(
         }
 
         let material = LMaterial {
-            image: Ok(info.base_texture_name),
+            image: Ok(info.base_texture_name.clone()),
+            mat: Handle::default(),
             vmt_src: info.vmt_src,
         };
 
-        loaded_textures.insert_material(material_name, material);
+        loaded_textures.insert_material(material_name.clone(), material);
+
+        materials_to_load.push((material_name, info));
+    }
+
+    for (material_name, info) in materials_to_load {
+        // let image = loaded_textures
+        //     .find_material_texture(&info.base_texture_name)
+        //     .unwrap_or_else(|| {
+        //         panic!("Failed to find {:?}", info.base_texture_name)
+        //     })?;
+        let image = loaded_textures
+            .vtf
+            .get(&info.base_texture_name)
+            .unwrap()
+            .image
+            .clone();
+
+        let material = make_material(image);
+        let material = materials.add(material);
+
+        loaded_textures
+            .find_material_mut(&material_name)
+            .unwrap()
+            .mat = material;
     }
 
     println!(
@@ -227,240 +256,266 @@ pub fn load_materials(
     Ok(())
 }
 
-fn load_materials2(
-    vpk: &VpkState,
-    loaded_textures: &mut LoadedTextures,
-    images: &mut Assets<Image>,
-    map: &GameMap,
-) -> eyre::Result<()> {
-    let material_names = material_names(map);
+pub fn make_material(image: Handle<Image>) -> StandardMaterial {
+    StandardMaterial {
+        // base_color: color,
+        base_color_texture: Some(image.clone()),
+        // alpha_mode: AlphaMode::Blend,
+        // unlit: true,
+        // emissive_texture: texture,
+        // TODO: determine this properly
+        // alpha_mode: if color.a() < 1.0 {
+        //     AlphaMode::Blend
+        // } else {
+        //     AlphaMode::Opaque
+        // },
 
-    let start_time = std::time::Instant::now();
+        // TODO: might be needed since source uses DX
+        // flip_normal_map_y
 
-    // The loaded/loading textures
-    let l: DashSet<Arc<str>> = DashSet::with_capacity(material_names.len());
-
-    // Our first stages finds all of the VMTs and loads them.
-    // Currently this assumes that the VMTs are cheap to load, which is
-    // probably usually/always true because they'll be in the dir VPK's preload
-    // but I have not actually checked.
-    // TODO: check how many materials are actually in storage files, the average time in my
-    // previous tests makes me think at least some of them are. If a notable amount are, then
-    // we can swap to getting them in the order we need to load them.
-
-    let material_m = Arc::new(Mutex::new(SeriesCalc::new()));
-    let image_m = Arc::new(Mutex::new(SeriesCalc::new()));
-
-    let m_mean = material_m.clone();
-    let img_mean = image_m.clone();
-
-    let iter = material_names
-        .into_par_iter()
-        .filter_map(move |material_name| {
-            let start_time = std::time::Instant::now();
-            let res = match construct_material_info2(vpk, Some(map), &material_name) {
-                Ok(info) => Some((material_name, info)),
-                Err(err) => {
-                    eprintln!(
-                        "Failed to construct material info for {}: {:?}",
-                        material_name, err
-                    );
-                    None
-                }
-            };
-
-            let end_time = std::time::Instant::now();
-
-            let mut mean = m_mean.lock().unwrap();
-            mean.update_dur(end_time - start_time);
-
-            res
-        })
-        // Deduplicate any textures. We still need to add all the different materials, but if they
-        // reference the same texture then we only want to load it once
-        .map(|(material_name, info)| {
-            // TODO: we'll need to extend this when we're loading more texture info from files
-            if l.contains(&info.base_texture_name) {
-                return (material_name, info, false);
-            }
-
-            l.insert(info.base_texture_name.clone());
-
-            // (material_name, info, should_load_img)
-            (material_name, info, true)
-        })
-        .filter_map(|(material_name, info, should_load_img)| {
-            let img_loc = if should_load_img {
-                Some(find_texture(vpk, Some(map), &info.base_texture_name))
-            } else {
-                None
-            };
-
-            Some((material_name, info, img_loc))
-        })
-        .collect::<Vec<_>>();
-
-    // We've collected the materials and dedup'd the texture references
-    // Now we want to add all the materials that don't need to
-    let mut texture_loc = iter
-        .into_iter()
-        // Add each material to the definition
-        .filter_map(|(material_name, info, img_loc)| {
-            let material = LMaterial {
-                image: Ok(info.base_texture_name.clone()),
-                vmt_src: info.vmt_src,
-            };
-
-            loaded_textures.insert_material(material_name.clone(), material);
-
-            match img_loc {
-                Some(Ok(loc)) => Some((info, loc)),
-                Some(Err(err)) => {
-                    eprintln!(
-                        "Failed to find texture for material {}: {:?}",
-                        material_name, err
-                    );
-                    None
-                }
-                None => None,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    // Now our iter is purely of the textures we need to load
-    // Most textures will not be in the preload, but rather will be in one of the many individual
-    // vpk storage files (suffixed by 000, 001, etc.)
-    // We want to load all of these in parallel, but also do so efficiently.
-    //
-    // We can't simply just open the `File`s and pass them in, because the position is managed by
-    // the `File`, and so that would just completely break in a multithreaded environment.
-    //
-    // It is also dispreferred to open/close the files separately. It might be fine, but it might
-    // also be slower due to constantly talking to the OS.
-    // This is especially a problem because the default order of the textures we're loading
-    // will naturally jump around randomly between the different storage files!
-    //
-    // So what we do here is sort the textures by their storage file.
-    // TODO(minor): We could sort them by their offset in the archive too
-    texture_loc.par_sort_unstable_by(|(_, a), (_, b)| match (a, b) {
-        // We sort by src and then by the archive index within that src
-        (
-            FileLoc::Vpk {
-                src: a,
-                archive_index: a_idx,
-            },
-            FileLoc::Vpk {
-                src: b,
-                archive_index: b_idx,
-            },
-        ) => match a.cmp(b) {
-            Ordering::Equal => a_idx.cmp(b_idx),
-            other => other,
-        },
-        // TODO(minor): might it be better to put maps in between two vpk loads, so that
-        // there is more time where the threads aren't touching the filesystem?
-        // VPKs are always before maps
-        (FileLoc::Vpk { .. }, FileLoc::Map) => Ordering::Less,
-        (FileLoc::Map, FileLoc::Vpk { .. }) => Ordering::Greater,
-        // TODO(minor): there's probably some ordering we could do for loading from the map's
-        // packfile but it almost certainly doesn't matter much.
-        (FileLoc::Map, FileLoc::Map) => Ordering::Equal,
-    });
-
-    // Now we can load the textures in parallel
-    // I'm currently breaking it into pieces based on the file type, but that seems less than ideal.
-
-    // TODO: don't assume there's at least one texture
-    let mut cur_type: FileLoc = texture_loc[0].1.clone();
-    let mut cur_start = 0;
-    let mut work = Vec::new();
-    for (i, (_info, loc)) in texture_loc.iter().enumerate() {
-        if loc != &cur_type {
-            let end = i;
-            work.push((cur_type, cur_start..end));
-            cur_type = loc.clone();
-            cur_start = end;
-        }
+        // unlit: true,
+        // metallic: 0.0,
+        // emissive: color,
+        // unlit: true,
+        // reflectance: 0.0,
+        ..Default::default()
     }
-    if cur_start != texture_loc.len() {
-        work.push((cur_type, cur_start..texture_loc.len()));
-    }
-
-    let res = work
-        .into_par_iter()
-        .filter_map(|(kind, range)| {
-            let data = &texture_loc[range];
-
-            let reader = match kind {
-                FileLoc::Vpk { src, archive_index } => {
-                    let path = vpk.archive_path(&src, archive_index).unwrap();
-                    let Ok(file) = std::fs::File::open(path) else {
-                        eprintln!("Failed to open file: {:?}", path);
-                        return None;
-                    };
-                    Some(file)
-                }
-                FileLoc::Map => None,
-            };
-
-            let mut images = Vec::new();
-            for (info, loc) in data {
-                assert_eq!(loc, &kind);
-
-                let start_time = std::time::Instant::now();
-                let res = construct_image(vpk, Some(map), &info.base_texture_name);
-                let res = match res {
-                    Ok((image, img_src)) => Some((info, (image, img_src))),
-                    Err(err) => {
-                        eprintln!(
-                            "Failed to construct image for material, texture {}: {:?}",
-                            info.base_texture_name, err
-                        );
-                        None
-                    }
-                };
-                let end_time = std::time::Instant::now();
-
-                let mut mean = image_m.lock().unwrap();
-                mean.update_dur(end_time - start_time);
-
-                if let Some(res) = res {
-                    images.push(res);
-                }
-            }
-
-            Some(images)
-        })
-        .flat_map(|x| x)
-        .collect::<Vec<_>>();
-
-    for (info, (image, img_src)) in res {
-        loaded_textures.insert_texture_of(
-            images,
-            info.base_texture_name.clone(),
-            image,
-            img_src,
-        )?;
-    }
-
-    println!(
-        "V: vmt #{}; vtf #{}",
-        loaded_textures.vmt.len(),
-        loaded_textures.vtf.len()
-    );
-
-    let end_time = std::time::Instant::now();
-
-    println!("Loaded textures in {:?};", end_time - start_time);
-    let material_m = material_m.lock().unwrap();
-    let image_m = image_m.lock().unwrap();
-    println!("Material mean: {:?}", material_m.mean() / 1000.0);
-    println!("Image mean: {:?}", image_m.mean() / 1000.0);
-
-    loaded_textures.frozen = true;
-
-    Ok(())
 }
+
+// fn load_materials2(
+//     vpk: &VpkState,
+//     loaded_textures: &mut LoadedTextures,
+//     images: &mut Assets<Image>,
+//     map: &GameMap,
+// ) -> eyre::Result<()> {
+//     let material_names = material_names(map);
+
+//     let start_time = std::time::Instant::now();
+
+//     // The loaded/loading textures
+//     let l: DashSet<Arc<str>> = DashSet::with_capacity(material_names.len());
+
+//     // Our first stages finds all of the VMTs and loads them.
+//     // Currently this assumes that the VMTs are cheap to load, which is
+//     // probably usually/always true because they'll be in the dir VPK's preload
+//     // but I have not actually checked.
+//     // TODO: check how many materials are actually in storage files, the average time in my
+//     // previous tests makes me think at least some of them are. If a notable amount are, then
+//     // we can swap to getting them in the order we need to load them.
+
+//     let material_m = Arc::new(Mutex::new(SeriesCalc::new()));
+//     let image_m = Arc::new(Mutex::new(SeriesCalc::new()));
+
+//     let m_mean = material_m.clone();
+//     let img_mean = image_m.clone();
+
+//     let iter = material_names
+//         .into_par_iter()
+//         .filter_map(move |material_name| {
+//             let start_time = std::time::Instant::now();
+//             let res = match construct_material_info2(vpk, Some(map), &material_name) {
+//                 Ok(info) => Some((material_name, info)),
+//                 Err(err) => {
+//                     eprintln!(
+//                         "Failed to construct material info for {}: {:?}",
+//                         material_name, err
+//                     );
+//                     None
+//                 }
+//             };
+
+//             let end_time = std::time::Instant::now();
+
+//             let mut mean = m_mean.lock().unwrap();
+//             mean.update_dur(end_time - start_time);
+
+//             res
+//         })
+//         // Deduplicate any textures. We still need to add all the different materials, but if they
+//         // reference the same texture then we only want to load it once
+//         .map(|(material_name, info)| {
+//             // TODO: we'll need to extend this when we're loading more texture info from files
+//             if l.contains(&info.base_texture_name) {
+//                 return (material_name, info, false);
+//             }
+
+//             l.insert(info.base_texture_name.clone());
+
+//             // (material_name, info, should_load_img)
+//             (material_name, info, true)
+//         })
+//         .filter_map(|(material_name, info, should_load_img)| {
+//             let img_loc = if should_load_img {
+//                 Some(find_texture(vpk, Some(map), &info.base_texture_name))
+//             } else {
+//                 None
+//             };
+
+//             Some((material_name, info, img_loc))
+//         })
+//         .collect::<Vec<_>>();
+
+//     // We've collected the materials and dedup'd the texture references
+//     // Now we want to add all the materials that don't need to
+//     let mut texture_loc = iter
+//         .into_iter()
+//         // Add each material to the definition
+//         .filter_map(|(material_name, info, img_loc)| {
+//             let material = LMaterial {
+//                 image: Ok(info.base_texture_name.clone()),
+//                 vmt_src: info.vmt_src,
+//             };
+
+//             loaded_textures.insert_material(material_name.clone(), material);
+
+//             match img_loc {
+//                 Some(Ok(loc)) => Some((info, loc)),
+//                 Some(Err(err)) => {
+//                     eprintln!(
+//                         "Failed to find texture for material {}: {:?}",
+//                         material_name, err
+//                     );
+//                     None
+//                 }
+//                 None => None,
+//             }
+//         })
+//         .collect::<Vec<_>>();
+
+//     // Now our iter is purely of the textures we need to load
+//     // Most textures will not be in the preload, but rather will be in one of the many individual
+//     // vpk storage files (suffixed by 000, 001, etc.)
+//     // We want to load all of these in parallel, but also do so efficiently.
+//     //
+//     // We can't simply just open the `File`s and pass them in, because the position is managed by
+//     // the `File`, and so that would just completely break in a multithreaded environment.
+//     //
+//     // It is also dispreferred to open/close the files separately. It might be fine, but it might
+//     // also be slower due to constantly talking to the OS.
+//     // This is especially a problem because the default order of the textures we're loading
+//     // will naturally jump around randomly between the different storage files!
+//     //
+//     // So what we do here is sort the textures by their storage file.
+//     // TODO(minor): We could sort them by their offset in the archive too
+//     texture_loc.par_sort_unstable_by(|(_, a), (_, b)| match (a, b) {
+//         // We sort by src and then by the archive index within that src
+//         (
+//             FileLoc::Vpk {
+//                 src: a,
+//                 archive_index: a_idx,
+//             },
+//             FileLoc::Vpk {
+//                 src: b,
+//                 archive_index: b_idx,
+//             },
+//         ) => match a.cmp(b) {
+//             Ordering::Equal => a_idx.cmp(b_idx),
+//             other => other,
+//         },
+//         // TODO(minor): might it be better to put maps in between two vpk loads, so that
+//         // there is more time where the threads aren't touching the filesystem?
+//         // VPKs are always before maps
+//         (FileLoc::Vpk { .. }, FileLoc::Map) => Ordering::Less,
+//         (FileLoc::Map, FileLoc::Vpk { .. }) => Ordering::Greater,
+//         // TODO(minor): there's probably some ordering we could do for loading from the map's
+//         // packfile but it almost certainly doesn't matter much.
+//         (FileLoc::Map, FileLoc::Map) => Ordering::Equal,
+//     });
+
+//     // Now we can load the textures in parallel
+//     // I'm currently breaking it into pieces based on the file type, but that seems less than ideal.
+
+//     // TODO: don't assume there's at least one texture
+//     let mut cur_type: FileLoc = texture_loc[0].1.clone();
+//     let mut cur_start = 0;
+//     let mut work = Vec::new();
+//     for (i, (_info, loc)) in texture_loc.iter().enumerate() {
+//         if loc != &cur_type {
+//             let end = i;
+//             work.push((cur_type, cur_start..end));
+//             cur_type = loc.clone();
+//             cur_start = end;
+//         }
+//     }
+//     if cur_start != texture_loc.len() {
+//         work.push((cur_type, cur_start..texture_loc.len()));
+//     }
+
+//     let res = work
+//         .into_par_iter()
+//         .filter_map(|(kind, range)| {
+//             let data = &texture_loc[range];
+
+//             let reader = match kind {
+//                 FileLoc::Vpk { src, archive_index } => {
+//                     let path = vpk.archive_path(&src, archive_index).unwrap();
+//                     let Ok(file) = std::fs::File::open(path) else {
+//                         eprintln!("Failed to open file: {:?}", path);
+//                         return None;
+//                     };
+//                     Some(file)
+//                 }
+//                 FileLoc::Map => None,
+//             };
+
+//             let mut images = Vec::new();
+//             for (info, loc) in data {
+//                 assert_eq!(loc, &kind);
+
+//                 let start_time = std::time::Instant::now();
+//                 let res = construct_image(vpk, Some(map), &info.base_texture_name);
+//                 let res = match res {
+//                     Ok((image, img_src)) => Some((info, (image, img_src))),
+//                     Err(err) => {
+//                         eprintln!(
+//                             "Failed to construct image for material, texture {}: {:?}",
+//                             info.base_texture_name, err
+//                         );
+//                         None
+//                     }
+//                 };
+//                 let end_time = std::time::Instant::now();
+
+//                 let mut mean = image_m.lock().unwrap();
+//                 mean.update_dur(end_time - start_time);
+
+//                 if let Some(res) = res {
+//                     images.push(res);
+//                 }
+//             }
+
+//             Some(images)
+//         })
+//         .flat_map(|x| x)
+//         .collect::<Vec<_>>();
+
+//     for (info, (image, img_src)) in res {
+//         loaded_textures.insert_texture_of(
+//             images,
+//             info.base_texture_name.clone(),
+//             image,
+//             img_src,
+//         )?;
+//     }
+
+//     println!(
+//         "V: vmt #{}; vtf #{}",
+//         loaded_textures.vmt.len(),
+//         loaded_textures.vtf.len()
+//     );
+
+//     let end_time = std::time::Instant::now();
+
+//     println!("Loaded textures in {:?};", end_time - start_time);
+//     let material_m = material_m.lock().unwrap();
+//     let image_m = image_m.lock().unwrap();
+//     println!("Material mean: {:?}", material_m.mean() / 1000.0);
+//     println!("Image mean: {:?}", image_m.mean() / 1000.0);
+
+//     loaded_textures.frozen = true;
+
+//     Ok(())
+// }
 
 pub fn missing_texture() -> Image {
     // Pink and black checkerboard

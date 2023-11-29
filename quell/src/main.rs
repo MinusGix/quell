@@ -28,6 +28,7 @@ fn main() {
 
     conf.render.mat.leafvis = MatLeafvis::CurrentVisleaf;
     conf.render.no_vis = true;
+    // conf.render.draw_map = false;
 
     let game_id = GameId::Tf2;
     let root_path = "./ex/tf/";
@@ -75,6 +76,7 @@ fn main() {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
 pub struct FaceIndex(pub usize);
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     mut asset_server: ResMut<AssetServer>,
@@ -85,8 +87,15 @@ fn setup(
     mut shaders: ResMut<Assets<Shader>>,
     vpk: Res<VpkState>,
     mut loaded_textures: ResMut<LoadedTextures>,
+    conf: Res<Config>,
 ) {
     loaded_textures.missing_texture = images.add(quell::material::missing_texture());
+    loaded_textures.missing_material = materials.add(StandardMaterial {
+        base_color_texture: Some(loaded_textures.missing_texture.clone()),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
 
     gizmo_conf.enabled = true;
     gizmo_conf.depth_bias = -1.;
@@ -146,7 +155,7 @@ fn setup(
     //     ..Default::default()
     // });
 
-    let transform = Transform::default();
+    // let transform = Transform::default();
     // commands.spawn((
     //     MaterialMeshBundle {
     //         mesh: meshes.add(Mesh::from(shape::Cube { size: 10.0 })),
@@ -213,7 +222,14 @@ fn setup(
     // let map_path = "ex/tf/tf/maps/test.bsp";
     let mut map = GameMap::from_path(map_path).unwrap();
     {
-        load_materials(&vpk, &mut loaded_textures, &mut images, &map).unwrap();
+        load_materials(
+            &vpk,
+            &mut loaded_textures,
+            &mut images,
+            &mut materials,
+            &map,
+        )
+        .unwrap();
 
         let start_time = std::time::Instant::now();
 
@@ -224,40 +240,23 @@ fn setup(
 
         println!("Model count: #{}", map.bsp.models.len());
 
-        let faces = construct_meshes(&loaded_textures, &map).collect::<Vec<_>>();
-        let materials = &mut materials;
-        let meshes = &mut meshes;
-        let cmds = faces
-            .into_iter()
-            .map(move |face_info| {
-                let FaceInfo {
-                    mesh,
-                    material,
-                    transform,
-                    face_i,
-                } = face_info;
-                let mesh = meshes.add(mesh);
-                let material = materials.add(material);
-
-                (
-                    PbrBundle {
-                        mesh,
-                        material,
-                        transform,
-                        ..Default::default()
-                    },
-                    FaceIndex(face_i),
-                )
-            })
-            // We have to collect a second time because spawn_batch requires a 'static
-            // iterator
-            .collect::<Vec<_>>();
-
-        // commands.spawn_batch(cmds);
-        for (pbr, face_i) in cmds {
-            let ent = commands.spawn((pbr, face_i));
-            map.faces.insert(face_i.0, ent.id());
+        if conf.render.draw_map {
+            setup_map(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &loaded_textures,
+                &mut map,
+            );
         }
+
+        setup_entities(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &loaded_textures,
+            &mut map,
+        );
 
         let end_time = std::time::Instant::now();
 
@@ -266,6 +265,157 @@ fn setup(
     // spawn_leaf_boundaries(&mut commands, &map, &mut *meshes, &mut *materials);
 
     commands.insert_resource(map);
+}
+
+fn setup_map(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    loaded_textures: &LoadedTextures,
+    map: &mut GameMap,
+) {
+    let faces = construct_meshes(loaded_textures, map).collect::<Vec<_>>();
+    let cmds = faces
+        .into_iter()
+        .map(move |face_info| {
+            let FaceInfo {
+                mesh,
+                material_name,
+                transform,
+                face_i,
+            } = face_info;
+            let mesh = meshes.add(mesh);
+            // TODO: unwrap to missing texture and log warning if it doesn't exist
+            let material = loaded_textures
+                .find_material_handle(material_name)
+                .unwrap_or_else(|| {
+                    println!("Failed to find material {material_name:?}");
+                    loaded_textures.missing_material.clone()
+                });
+
+            (
+                PbrBundle {
+                    mesh,
+                    material,
+                    transform,
+                    ..Default::default()
+                },
+                FaceIndex(face_i),
+            )
+        })
+        // We have to collect a second time because spawn_batch requires a 'static
+        // iterator
+        .collect::<Vec<_>>();
+
+    // commands.spawn_batch(cmds);
+    // Ugh, spawn batch doesn't spawn immediately and so doesn't give us any way to get the entity
+    // ids!
+    for (pbr, face_i) in cmds {
+        let ent = commands.spawn((pbr, face_i));
+        map.faces.insert(face_i.0, ent.id());
+    }
+}
+
+fn setup_entities(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    loaded_textures: &LoadedTextures,
+    map: &mut GameMap,
+) {
+    use vbsp::Entity;
+    for raw_ent in map.bsp.entities.iter() {
+        // let props = raw_ent.properties().collect::<Vec<_>>();
+        // println!("Entity: {raw_ent:?}\n\t{props:#?}\n\n");
+        let ent = raw_ent.parse().unwrap();
+        // println!("Ent: {ent:?}");
+        spawn_entity(commands, meshes, materials, loaded_textures, map, &ent);
+    }
+}
+
+fn spawn_entity(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    loaded_textures: &LoadedTextures,
+    map: &GameMap,
+    ent: &vbsp::Entity,
+) {
+    use vbsp::Entity;
+
+    match ent {
+        Entity::Spawn(spawn) => {
+            // TODO: draw a box here
+        }
+        // Spectating player camera
+        Entity::ObserverPoint(_) => {}
+        Entity::SkyCamera(_) => {}
+        // Lights
+        Entity::Light(light) => {
+            // Lights are a point which shines in all directions
+            let origin = <[f32; 3]>::from(light.origin);
+            let origin = rotate(scale(origin));
+            let [r, g, b, brightness] = light.light;
+
+            let color = Color::rgb_u8(r as u8, g as u8, b as u8);
+            let brightness = brightness as f32 * 100.0;
+
+            let transform = Transform::from_xyz(origin[0], origin[1], origin[2]);
+
+            println!("Creating point light at {transform:?}; {r},{g},{b}; {brightness}");
+
+            commands.spawn(PointLightBundle {
+                point_light: PointLight {
+                    intensity: brightness,
+                    color,
+                    shadows_enabled: true,
+                    ..default()
+                },
+                transform,
+                ..default()
+            });
+        }
+        Entity::SpotLight(spot_light) => {}
+        Entity::LightSpot(light_spot) => {}
+        Entity::LightGlow(light_glow) => {}
+        // Models
+        Entity::AmmoPackSmall(_ammo)
+        | Entity::AmmoPackMedium(_ammo)
+        | Entity::AmmoPackFull(_ammo) => {}
+        Entity::HealthPackSmall(_health)
+        | Entity::HealthPackMedium(_health)
+        | Entity::HealthPackFull(_health) => {}
+        Entity::Door(_door) => {}
+        Entity::Brush(brush) => {}
+        Entity::PropDynamic(prop) => {}
+        Entity::PropDynamicOverride(prop) => {}
+        Entity::PropPhysics(prop) => {}
+        // Particles / Decals
+        Entity::ParticleSystem(_) => {}
+        Entity::EnvSprite(_) => {}
+        Entity::DustMotes(_) => {}
+        // Rope
+        Entity::RopeKeyFrame(_) => {}
+        Entity::RopeMove(_) => {}
+        // Sound
+        Entity::SoundScapeProxy(_) => {}
+        // Logic
+        Entity::LogicAuto(_) => {}
+        Entity::TriggerMultiple(_) => {}
+        // Other
+        Entity::WorldSpawn(world_spawn) => {
+            // world_spawns.push(world_spawn);
+        }
+        Entity::AreaPortal(_) => {}
+        Entity::RespawnVisualizer(_) => {}
+        Entity::RespawnRoom(room) => {
+            // TODO: fill this with a box
+        }
+        Entity::FilterActivatorTeam(_) => {}
+        Entity::Regenerate(_) => {}
+        Entity::Unknown(_) => {}
+        _ => println!("Ent: {ent:?}"),
+    }
 }
 
 // TODO: possibly we should group faces under one parent node so we can hide them all at once?
