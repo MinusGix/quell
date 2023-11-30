@@ -87,7 +87,7 @@ pub fn material_names(map: &GameMap) -> Vec<Arc<str>> {
     material_names
 }
 
-/// Load all the (materials -> textures) as images in parallel
+/// Load all the (materials -> textures) in parallel
 pub fn load_materials(
     vpk: &VpkState,
     loaded_textures: &mut LoadedTextures,

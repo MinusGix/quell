@@ -9,7 +9,10 @@ use quell::{
     data::{GameId, LoadedTextures, VpkState},
     map::GameMap,
     material::load_materials,
-    mesh::{construct_meshes, rotate, rotate_s, scale, unrotate, unscale, FaceInfo},
+    mesh::{
+        angle_map, construct_meshes, degrees_to_radians, rotate, rotate_s, scale, unrotate,
+        unscale, FaceInfo,
+    },
     util::transform_to_vbsp,
 };
 
@@ -66,6 +69,7 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OutlinePlugin)
         .add_systems(Startup, setup)
+        .add_systems(Update, update_light_gizmos)
         // Not sure if this should be preupdate or not
         // .add_systems(PreUpdate, update_visibility)
         // .add_systems(Update, leafvis_frame)
@@ -107,7 +111,7 @@ fn setup(
     commands.spawn(PointLightBundle {
         point_light: PointLight {
             intensity: 1500.0,
-            shadows_enabled: true,
+            shadows_enabled: false,
             ..default()
         },
         transform: Transform::from_xyz(4.0, 200.0, 4.0),
@@ -368,16 +372,92 @@ fn spawn_entity(
                 point_light: PointLight {
                     intensity: brightness,
                     color,
-                    shadows_enabled: true,
+                    shadows_enabled: false,
                     ..default()
                 },
                 transform,
                 ..default()
             });
         }
-        Entity::SpotLight(spot_light) => {}
-        Entity::LightSpot(light_spot) => {}
-        Entity::LightGlow(light_glow) => {}
+        Entity::SpotLight(spot_light) => {
+            let origin = <[f32; 3]>::from(spot_light.origin);
+            let origin = rotate(scale(origin));
+            let angles = angle_map(spot_light.angles);
+            let [r, g, b] = spot_light.color;
+            // also known as spotlight width
+            // the outer (fading) angle
+            let cone = spot_light.cone;
+            // TODO: it might have other things like entity to point at, pitch, inner cone, focus...
+
+            let color = Color::rgb_u8(r, g, b);
+
+            let pitch = degrees_to_radians(angles[0]);
+            let yaw = degrees_to_radians(angles[1]);
+            let roll = degrees_to_radians(angles[2]);
+            let transform = Transform::from_xyz(origin[0], origin[1], origin[2])
+                .looking_at(Vec3::ZERO, Vec3::Y)
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, pitch, yaw, roll));
+
+            println!("Creating spot light at {transform:?}; {r},{g},{b}; {cone}");
+
+            commands.spawn(SpotLightBundle {
+                spot_light: SpotLight {
+                    // color,
+                    // intensity: todo!(),
+                    // range: todo!(),
+                    // radius: todo!(),
+                    // shadows_enabled: todo!(),
+                    // shadow_depth_bias: todo!(),
+                    // shadow_normal_bias: todo!(),
+                    // outer_angle: todo!(),
+                    // inner_angle: todo!(),
+                    color,
+                    intensity: 800.0,
+                    range: 40.0,
+                    radius: 20.0,
+                    shadows_enabled: false,
+                    ..Default::default()
+                },
+                transform,
+                ..default()
+            });
+        }
+        Entity::LightSpot(light_spot) => {
+            let origin = <[f32; 3]>::from(light_spot.origin);
+            let origin = rotate(scale(origin));
+            let angles = angle_map(light_spot.angles);
+            let [r, g, b, brightness] = light_spot.light;
+            let cone = light_spot.cone;
+
+            let color = Color::rgb_u8(r as u8, g as u8, b as u8);
+            let brightness = brightness as f32 * 100.0;
+
+            let pitch = degrees_to_radians(angles[0]);
+            let yaw = degrees_to_radians(angles[1]);
+            let roll = degrees_to_radians(angles[2]);
+
+            let transform = Transform::from_xyz(origin[0], origin[1], origin[2])
+                .looking_at(Vec3::ZERO, Vec3::Y)
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, pitch, yaw, roll));
+
+            println!("Creating spot light at {transform:?}; {r},{g},{b}; {cone}");
+
+            // commands.spawn(SpotLightBundle {
+            //     spot_light: SpotLight {
+            //         color,
+            //         intensity: brightness,
+            //         range: 40.0,
+            //         radius: 20.0,
+            //         shadows_enabled: false,
+            //         ..Default::default()
+            //     },
+            //     transform,
+            //     ..default()
+            // });
+        }
+        Entity::LightGlow(light_glow) => {
+            // TODO
+        }
         // Models
         Entity::AmmoPackSmall(_ammo)
         | Entity::AmmoPackMedium(_ammo)
@@ -759,4 +839,23 @@ fn leafvis_frame(
     //     gizmos.line(front_top_left, back_top_left, color);
     //     gizmos.line(front_top_right, back_top_right, color);
     // }
+}
+
+fn update_light_gizmos(
+    spot_lights: Query<&Transform, With<SpotLight>>,
+    point_lights: Query<&Transform, With<PointLight>>,
+    mut gizmos: Gizmos,
+) {
+    // Spot light is yellow
+    let spot_light_color = Color::rgb(1.0, 1.0, 0.0);
+    // Point light is purple
+    let point_light_color = Color::rgb(1.0, 0.0, 1.0);
+    for transform in spot_lights.iter() {
+        let tra = transform.translation;
+        gizmos.sphere(tra, Quat::default(), 0.1, spot_light_color);
+    }
+    for transform in point_lights.iter() {
+        let tra = transform.translation;
+        gizmos.sphere(tra, Quat::default(), 0.1, point_light_color);
+    }
 }
