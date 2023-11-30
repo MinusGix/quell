@@ -35,6 +35,8 @@ pub struct RenderConfig {
     // TODO: listen for when this changes
     #[derivative(Default(value = "true"))]
     pub draw_map: bool,
+    #[derivative(Default(value = "true"))]
+    pub draw_lights: bool,
 }
 
 #[derive(Debug, Default, Clone)]

@@ -10,8 +10,7 @@ use quell::{
     map::GameMap,
     material::load_materials,
     mesh::{
-        angle_map, construct_meshes, degrees_to_radians, rotate, rotate_s, scale, unrotate,
-        unscale, FaceInfo,
+        angle_map, construct_meshes, degrees_to_radians, rotate, scale, unrotate, unscale, FaceInfo,
     },
     util::transform_to_vbsp,
 };
@@ -32,6 +31,7 @@ fn main() {
     conf.render.mat.leafvis = MatLeafvis::CurrentVisleaf;
     conf.render.no_vis = true;
     // conf.render.draw_map = false;
+    conf.render.draw_lights = false;
 
     let game_id = GameId::Tf2;
     let root_path = "./ex/tf/";
@@ -69,7 +69,8 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OutlinePlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, update_light_gizmos)
+        // .add_systems(Update, update_light_gizmos)
+        .add_systems(Update, update_light_vis)
         // Not sure if this should be preupdate or not
         // .add_systems(PreUpdate, update_visibility)
         // .add_systems(Update, leafvis_frame)
@@ -266,6 +267,7 @@ fn setup(
 
         println!("Loaded map in {:?}", end_time - start_time);
     }
+
     // spawn_leaf_boundaries(&mut commands, &map, &mut *meshes, &mut *materials);
 
     commands.insert_resource(map);
@@ -337,6 +339,9 @@ fn setup_entities(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub struct EntityLight;
+
 fn spawn_entity(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -368,16 +373,18 @@ fn spawn_entity(
 
             println!("Creating point light at {transform:?}; {r},{g},{b}; {brightness}");
 
-            commands.spawn(PointLightBundle {
-                point_light: PointLight {
-                    intensity: brightness,
-                    color,
-                    shadows_enabled: false,
+            commands
+                .spawn(PointLightBundle {
+                    point_light: PointLight {
+                        intensity: brightness,
+                        color,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    transform,
                     ..default()
-                },
-                transform,
-                ..default()
-            });
+                })
+                .insert(EntityLight);
         }
         Entity::SpotLight(spot_light) => {
             let origin = <[f32; 3]>::from(spot_light.origin);
@@ -403,27 +410,29 @@ fn spawn_entity(
                 spot_light.angles, transform.rotation
             );
 
-            commands.spawn(SpotLightBundle {
-                spot_light: SpotLight {
-                    // color,
-                    // intensity: todo!(),
-                    // range: todo!(),
-                    // radius: todo!(),
-                    // shadows_enabled: todo!(),
-                    // shadow_depth_bias: todo!(),
-                    // shadow_normal_bias: todo!(),
-                    // outer_angle: todo!(),
-                    // inner_angle: todo!(),
-                    color,
-                    intensity: 800.0,
-                    range: 40.0,
-                    radius: 20.0,
-                    shadows_enabled: false,
-                    ..Default::default()
-                },
-                transform,
-                ..default()
-            });
+            commands
+                .spawn(SpotLightBundle {
+                    spot_light: SpotLight {
+                        // color,
+                        // intensity: todo!(),
+                        // range: todo!(),
+                        // radius: todo!(),
+                        // shadows_enabled: todo!(),
+                        // shadow_depth_bias: todo!(),
+                        // shadow_normal_bias: todo!(),
+                        // outer_angle: todo!(),
+                        // inner_angle: todo!(),
+                        color,
+                        intensity: 800.0,
+                        range: 40.0,
+                        radius: 20.0,
+                        shadows_enabled: false,
+                        ..Default::default()
+                    },
+                    transform,
+                    ..default()
+                })
+                .insert(EntityLight);
         }
         Entity::LightSpot(light_spot) => {
             let origin = <[f32; 3]>::from(light_spot.origin);
@@ -456,7 +465,8 @@ fn spawn_entity(
             //     },
             //     transform,
             //     ..default()
-            // });
+            // })
+            // .insert(EntityLight);
         }
         Entity::LightGlow(light_glow) => {
             // TODO
@@ -842,6 +852,26 @@ fn leafvis_frame(
     //     gizmos.line(front_top_left, back_top_left, color);
     //     gizmos.line(front_top_right, back_top_right, color);
     // }
+}
+
+/// Update light visibility based on conf
+fn update_light_vis(mut lights: Query<&mut Visibility, With<EntityLight>>, conf: Res<Config>) {
+    // TODO: smarter change detection! This would rarely be updated!
+    // TODO: should we just have every light be a child of some root light that would be far
+    // simpler to update visibility on?
+
+    let v = if conf.render.draw_lights {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+
+    for mut vis in lights.iter_mut() {
+        let vis_v = *vis;
+        if vis_v != v {
+            *vis = v;
+        }
+    }
 }
 
 fn update_light_gizmos(

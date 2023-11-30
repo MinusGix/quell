@@ -203,6 +203,8 @@ fn create_basic_map_mesh<'a>(
         let plane = bsp.planes.get(face.plane_num as usize).unwrap();
         plane.normal.into()
     };
+    let normal = rotate(normal);
+    let normal = [-normal[0], -normal[2], -normal[2]];
     // let normal = [-normal[0], -normal[2], -normal[1]];
     // TODO: do we need to rotate the normal?
 
@@ -414,50 +416,50 @@ fn create_displacement_mesh<'a>(
         for x in 0..(verts_wide - 1) {
             let i = x + y * verts_wide;
 
-            // TODO: Displacement don't work with the other rotate, why?
-            // They look fine with just swapping the z and y, but the normal mesh
-            // looked fine with that until I had to apply the texture.
-            let v1 = scale(rotate_s(base_verts[i as usize]));
-            let v2 = scale(rotate_s(base_verts[(i + 1) as usize]));
-            let v3 = scale(rotate_s(base_verts[(i + verts_wide) as usize]));
-            let v4 = scale(rotate_s(base_verts[(i + verts_wide + 1) as usize]));
+            let v1 = scale(rotate(base_verts[i as usize]));
+            let v2 = scale(rotate(base_verts[(i + 1) as usize]));
+            let v3 = scale(rotate(base_verts[(i + verts_wide) as usize]));
+            let v4 = scale(rotate(base_verts[(i + verts_wide + 1) as usize]));
 
+            // TODO: I'm unsure about the normal calculations. I think they were originally done in
+            // the source or opengl coordinates rather than bevys and not sure I corrected them
+            // right.
             if i % 2 != 0 {
-                let normal = find_normal(v1, v3, v2);
+                let normal = find_normal(v2, v3, v1);
                 // let color = Color::rgb(tex_r1, tex_g1, tex_b1);
 
+                tris.push(v2);
+                normals.push(normal);
+                tris.push(v3);
+                normals.push(normal);
                 tris.push(v1);
                 normals.push(normal);
-                tris.push(v3);
-                normals.push(normal);
-                tris.push(v2);
-                normals.push(normal);
 
-                let normal = find_normal(v2, v3, v4);
+                let normal = find_normal(v4, v3, v2);
 
-                tris.push(v2);
-                normals.push(normal);
-                tris.push(v3);
-                normals.push(normal);
                 tris.push(v4);
+                normals.push(normal);
+                tris.push(v3);
+                normals.push(normal);
+                tris.push(v2);
                 normals.push(normal);
             } else {
-                let normal = find_normal(v1, v3, v4);
+                let normal = find_normal(v4, v3, v1);
 
-                tris.push(v1);
+                tris.push(v4);
                 normals.push(normal);
                 tris.push(v3);
                 normals.push(normal);
-                tris.push(v4);
+                tris.push(v1);
                 normals.push(normal);
 
-                let normal = find_normal(v1, v4, v2);
+                let normal = find_normal(v4, v1, v2);
 
-                tris.push(v2);
+                tris.push(v4);
                 normals.push(normal);
                 tris.push(v1);
                 normals.push(normal);
-                tris.push(v4);
+                tris.push(v2);
                 normals.push(normal);
             }
         }
@@ -466,8 +468,6 @@ fn create_displacement_mesh<'a>(
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, tris);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-
-    // let material: StandardMaterial = color.into();
 
     FaceInfo {
         mesh,
@@ -500,23 +500,18 @@ fn find_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 //     col
 // }
 
-/// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
+/// Rotate from a source engine vector to a bevy vector.
 pub fn rotate(v: [f32; 3]) -> [f32; 3] {
-    [v[0], v[2], -v[1]]
+    [-v[1], v[2], -v[0]]
 }
-pub fn rotate_s(v: [f32; 3]) -> [f32; 3] {
-    [v[0], v[2], v[1]]
-}
-/// Rotate a right handed z-up (source engine) vector to a right handed y-up (bevy) vector.
+/// Rotate from a source engine vector to a bevy vector.
 pub fn rotate_4(v: [f32; 4]) -> [f32; 4] {
-    [v[0], v[2], -v[1], v[3]]
+    [-v[1], v[2], -v[0], v[3]]
 }
 
+/// Rotate from a bevy vector to a source engine vector.
 pub fn unrotate(v: [f32; 3]) -> [f32; 3] {
-    [v[0], -v[2], v[1]]
-}
-pub fn unrotate_s(v: [f32; 3]) -> [f32; 3] {
-    [v[0], v[2], v[1]]
+    [-v[2], -v[0], v[1]]
 }
 
 pub fn scale(v: [f32; 3]) -> [f32; 3] {
