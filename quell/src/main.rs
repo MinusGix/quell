@@ -391,14 +391,17 @@ fn spawn_entity(
 
             let color = Color::rgb_u8(r, g, b);
 
-            let pitch = degrees_to_radians(angles[0]);
-            let yaw = degrees_to_radians(angles[1]);
-            let roll = degrees_to_radians(angles[2]);
+            let x_r = degrees_to_radians(angles[0]);
+            let y_r = degrees_to_radians(angles[1]);
+            let z_r = degrees_to_radians(angles[2]);
             let transform = Transform::from_xyz(origin[0], origin[1], origin[2])
-                .looking_at(Vec3::ZERO, Vec3::Y)
-                .with_rotation(Quat::from_euler(EulerRot::XYZ, pitch, yaw, roll));
+                // .looking_at(Vec3::ZERO, Vec3::Y)
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, x_r, y_r, z_r));
 
-            println!("Creating spot light at {transform:?}; {r},{g},{b}; {cone}");
+            println!(
+                "Creating spot light at {:?} -> {angles:?} -> {:?}; {r},{g},{b}; {cone}",
+                spot_light.angles, transform.rotation
+            );
 
             commands.spawn(SpotLightBundle {
                 spot_light: SpotLight {
@@ -853,6 +856,10 @@ fn update_light_gizmos(
     for transform in spot_lights.iter() {
         let tra = transform.translation;
         gizmos.sphere(tra, Quat::default(), 0.1, spot_light_color);
+        // draw a line in the direction of the light
+        let direction = -transform.local_z() * 0.5;
+        let end = tra + direction;
+        gizmos.line(tra, end, spot_light_color);
     }
     for transform in point_lights.iter() {
         let tra = transform.translation;

@@ -534,9 +534,9 @@ pub(crate) fn tex_coord_4(v: [f32; 4]) -> [f32; 4] {
 }
 
 pub fn angle_map(a: [f32; 3]) -> [f32; 3] {
-    let a = rotate_s(a);
+    let a = rotate(a);
     // TODO: this might not work if we allow negative angles?
-    let a = [a[0].min(90.), a[1].min(90.0), a[2].min(90.0)];
+    // let a = [a[0].min(90.), a[1].min(90.0), a[2].min(90.0)];
     a
 }
 
